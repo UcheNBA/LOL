@@ -3,12 +3,13 @@ from time import monotonic
 
 from flask import request
 from flask_login import current_user
-from flask_socketio import emit, join_room
+from flask_socketio import join_room
 from sqlalchemy import select
 
 from .chat_service import member_for, message_payload
 from .extensions import db
-from .models import Chat, ChatMember, Message, MessageStatus, utcnow
+from .models import Chat, ChatMember, Message, MessageStatus, Reaction, User, utcnow
+from .presence import connect_socket, disconnect_socket
 
 _send_times = defaultdict(deque)
 
@@ -130,9 +131,69 @@ def register_socket_handlers(socketio):
         }, to=f"chat:{status.message.chat_id}")
         return {"ok": True}
 
+    @socketio.on("message:edit")
+    def edit_message(payload):
+        if not current_user.is_authenticated:
+            return {"ok": False, "error": "Sign in required."}
+        payload = payload or {}
+        try:
+            message_id = int(payload.get("message_id"))
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "Invalid message."}
+        body = str(payload.get("body", "")).strip()
+        message = db.session.get(Message, message_id)
+        if not message or not member_for(message.chat_id, current_user.id):
+            return {"ok": False, "error": "Message not found."}
+        if message.sender_id != current_user.id:
+            return {"ok": False, "error": "You can only edit your own messages."}
+        if not body or len(body) > 4000:
+            return {"ok": False, "error": "Message must contain 1-4000 characters."}
+        message.body = body
+        message.edited_at = utcnow()
+        message.chat.updated_at = message.edited_at
+        db.session.commit()
+        data = message_payload(message, current_user.id)
+        socketio.emit("message:updated", data, to=f"chat:{message.chat_id}")
+        return {"ok": True, "message": data}
+
+    @socketio.on("message:react")
+    def react_to_message(payload):
+        if not current_user.is_authenticated:
+            return {"ok": False, "error": "Sign in required."}
+        payload = payload or {}
+        try:
+            message_id = int(payload.get("message_id"))
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "Invalid message."}
+        emoji = str(payload.get("emoji", ""))
+        if emoji not in {"👍", "❤️", "😂", "😮", "😢", "🙏", "🔥", "🎉", "👏", "💯"}:
+            return {"ok": False, "error": "Choose an emoji from the reaction list."}
+        message = db.session.get(Message, message_id)
+        if not message or not member_for(message.chat_id, current_user.id):
+            return {"ok": False, "error": "Message not found."}
+        reaction = db.session.scalar(select(Reaction).where(
+            Reaction.message_id == message_id,
+            Reaction.user_id == current_user.id,
+            Reaction.emoji == emoji,
+        ))
+        if reaction:
+            db.session.delete(reaction)
+        else:
+            db.session.add(Reaction(
+                message_id=message_id, user_id=current_user.id, emoji=emoji))
+        db.session.commit()
+        data = message_payload(message, current_user.id)
+        socketio.emit("message:reactions", {
+            "message_id": message_id,
+            "reactions": data["reactions"],
+        }, to=f"chat:{message.chat_id}")
+        return {"ok": True, "reactions": data["reactions"]}
+
     @socketio.on("connect")
     def connected(auth=None):
         if current_user.is_authenticated:
+            user_id = current_user.id
+            became_online = connect_socket(request.sid, user_id)
             join_room(f"user:{current_user.id}")
             memberships = db.session.scalars(
                 select(ChatMember.chat_id).where(
@@ -140,3 +201,31 @@ def register_socket_handlers(socketio):
             ).all()
             for chat_id in memberships:
                 join_room(f"chat:{chat_id}")
+            if became_online:
+                for chat_id in memberships:
+                    socketio.emit("presence:update", {
+                        "user_id": user_id,
+                        "online": True,
+                        "last_seen_at": None,
+                    }, to=f"chat:{chat_id}")
+
+    @socketio.on("disconnect")
+    def disconnected(reason=None):
+        user_id, went_offline = disconnect_socket(request.sid)
+        if user_id is None or not went_offline:
+            return
+        user = db.session.get(User, user_id)
+        if not user:
+            return
+        user.last_seen_at = utcnow()
+        last_seen = user.last_seen_at.isoformat()
+        chat_ids = db.session.scalars(select(ChatMember.chat_id).where(
+            ChatMember.user_id == user_id
+        )).all()
+        db.session.commit()
+        for chat_id in chat_ids:
+            socketio.emit("presence:update", {
+                "user_id": user_id,
+                "online": False,
+                "last_seen_at": last_seen,
+            }, to=f"chat:{chat_id}")

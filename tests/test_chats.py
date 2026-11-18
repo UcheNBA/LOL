@@ -3,6 +3,8 @@ import pytest
 from lol import create_app, socketio
 from lol.extensions import db
 from lol.models import Chat, ChatMember, Message, MessageStatus, User
+from lol.models import Reaction
+from lol.presence import is_online
 
 
 @pytest.fixture()
@@ -196,3 +198,79 @@ def test_message_history_paginates_older_messages_in_order(app, users):
     assert [message["body"] for message in older["messages"]] == [
         f"History message {index}" for index in range(1, 6)
     ]
+
+
+def test_message_edit_is_limited_to_sender(app, users):
+    first_id, second_id, _ = users
+    owner_client = signed_in_client(app, "first_user")
+    chat_id = owner_client.post(
+        "/api/chats", json={"user_id": second_id}).json["chat_id"]
+    socket_owner = socketio.test_client(app, flask_test_client=owner_client)
+    sent = socket_owner.emit("message:send", {
+        "chat_id": chat_id,
+        "body": "Original text",
+        "client_id": "editable-message",
+    }, callback=True)
+    message_id = sent["message"]["id"]
+
+    stranger_socket = socketio.test_client(
+        app, flask_test_client=signed_in_client(app, "stranger"))
+    denied = stranger_socket.emit("message:edit", {
+        "message_id": message_id,
+        "body": "Changed by someone else",
+    }, callback=True)
+    assert not denied["ok"]
+
+    edited = socket_owner.emit("message:edit", {
+        "message_id": message_id,
+        "body": "Updated text",
+    }, callback=True)
+    assert edited["ok"]
+    assert edited["message"]["body"] == "Updated text"
+    assert edited["message"]["edited"] is True
+    with app.app_context():
+        message = db.session.get(Message, message_id)
+        assert message.sender_id == first_id
+        assert message.edited_at is not None
+    stranger_socket.disconnect()
+    socket_owner.disconnect()
+
+
+def test_reactions_toggle_and_aggregate(app, users):
+    _, second_id, _ = users
+    client = signed_in_client(app, "first_user")
+    chat_id = client.post(
+        "/api/chats", json={"user_id": second_id}).json["chat_id"]
+    socket_client = socketio.test_client(app, flask_test_client=client)
+    sent = socket_client.emit("message:send", {
+        "chat_id": chat_id,
+        "body": "React here",
+        "client_id": "reactable-message",
+    }, callback=True)
+    message_id = sent["message"]["id"]
+
+    first = socket_client.emit("message:react", {
+        "message_id": message_id, "emoji": "❤️",
+    }, callback=True)
+    assert first["ok"]
+    assert first["reactions"] == [{"emoji": "❤️", "count": 1, "reacted": True}]
+    second = socket_client.emit("message:react", {
+        "message_id": message_id, "emoji": "❤️",
+    }, callback=True)
+    assert second["ok"]
+    assert second["reactions"] == []
+    with app.app_context():
+        assert db.session.scalar(db.select(db.func.count(Reaction.id))) == 0
+    socket_client.disconnect()
+
+
+def test_disconnect_records_last_seen(app, users):
+    user_id, _, _ = users
+    client = signed_in_client(app, "first_user")
+    socket_client = socketio.test_client(app, flask_test_client=client)
+    assert is_online(user_id)
+    socket_client.disconnect()
+    assert not is_online(user_id)
+    with app.app_context():
+        user = db.session.get(User, user_id)
+        assert user.last_seen_at is not None

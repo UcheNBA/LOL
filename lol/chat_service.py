@@ -3,7 +3,8 @@ from datetime import datetime
 from sqlalchemy import func, select
 
 from .extensions import db
-from .models import Chat, ChatMember, Message, MessageStatus, User, utcnow
+from .models import Chat, ChatMember, Message, MessageStatus, Reaction, User, utcnow
+from .presence import is_online
 
 
 def format_time(value):
@@ -35,6 +36,17 @@ def message_payload(message, viewer_id):
         status.read_at for status in recipient_statuses)
     delivered = bool(recipient_statuses) and all(
         status.delivered_at for status in recipient_statuses)
+    reaction_counts = db.session.execute(
+        select(Reaction.emoji, db.func.count(Reaction.id))
+        .where(Reaction.message_id == message.id)
+        .group_by(Reaction.emoji)
+    ).all()
+    viewer_reactions = set(db.session.scalars(
+        select(Reaction.emoji).where(
+            Reaction.message_id == message.id,
+            Reaction.user_id == viewer_id,
+        )
+    ).all())
     return {
         "id": message.id,
         "client_id": message.client_id,
@@ -46,6 +58,11 @@ def message_payload(message, viewer_id):
         "time": format_time(message.created_at),
         "mine": message.sender_id == viewer_id,
         "status": "read" if read else "delivered" if delivered else "sent",
+        "edited": message.edited_at is not None,
+        "reactions": [
+            {"emoji": emoji, "count": count, "reacted": emoji in viewer_reactions}
+            for emoji, count in reaction_counts
+        ],
     }
 
 
@@ -65,10 +82,12 @@ def chat_payload(chat, user_id):
     unread = db.session.scalar(unread_query) or 0
     title = chat_title(chat, user_id)
     preview = latest.body if latest else "Start a conversation"
+    other_online = bool(other and is_online(other.id))
     return {
         "id": chat.id,
         "title": title,
         "username": other.username if other else "",
+        "other_user_id": other.id if other else None,
         "avatar_url": (other.avatar_url if other else None) or chat.avatar_url,
         "initial": avatar_initial(title),
         "preview": preview,
@@ -76,4 +95,6 @@ def chat_payload(chat, user_id):
         "updated_at": (latest.created_at if latest else chat.updated_at).isoformat(),
         "unread": unread,
         "last_message_id": latest.id if latest else None,
+        "online": other_online,
+        "last_seen_at": other.last_seen_at.isoformat() if other and other.last_seen_at else None,
     }

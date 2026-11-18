@@ -1147,6 +1147,15 @@ textarea:focus-visible {
     font-size: 9px;
 }
 
+.conversation-person .presence-label {
+    min-height: 10px;
+    font-size: 9px;
+}
+
+.conversation-person .presence-label.is-online {
+    color: var(--accent-deep);
+}
+
 .head-decoration {
     margin-left: auto;
     color: var(--muted);
@@ -1200,9 +1209,15 @@ textarea:focus-visible {
     justify-content: flex-start;
 }
 
+.message-content {
+    position: relative;
+    width: fit-content;
+    max-width: min(80%, 520px);
+}
+
 .message-bubble {
     position: relative;
-    max-width: min(75%, 490px);
+    max-width: 100%;
     min-width: 82px;
     padding: 10px 12px 7px;
     border-radius: 8px 8px 8px 2px;
@@ -1255,6 +1270,73 @@ textarea:focus-visible {
     font: 8px var(--mono);
 }
 
+.message-edited {
+    color: var(--muted);
+    font: italic 8px var(--sans);
+}
+
+.message-actions {
+    min-height: 28px;
+    display: flex;
+    justify-content: flex-end;
+    gap: 2px;
+}
+
+.message-theirs .message-actions {
+    justify-content: flex-start;
+}
+
+.message-action {
+    width: 30px;
+    height: 28px;
+    display: inline-grid;
+    place-items: center;
+    border: 0;
+    border-radius: 14px;
+    color: var(--muted);
+    background: transparent;
+    font-size: 14px;
+    cursor: pointer;
+}
+
+.message-action:hover,
+.message-action:focus-visible {
+    color: var(--accent-deep);
+    background: var(--surface);
+}
+
+.reaction-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.reaction-list:empty {
+    display: none;
+}
+
+.reaction-chip {
+    min-width: 38px;
+    min-height: 28px;
+    padding: 2px 8px;
+    border: 1px solid var(--line);
+    border-radius: 15px;
+    color: var(--ink);
+    background: var(--surface);
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.reaction-chip span {
+    color: var(--muted);
+    font: 9px var(--mono);
+}
+
+.reaction-chip.is-selected {
+    border-color: var(--accent);
+    background: var(--accent-pale);
+}
+
 .message-status {
     color: #8e9a93;
     font-size: 10px;
@@ -1291,6 +1373,10 @@ textarea:focus-visible {
 
 .composer-tool:disabled {
     opacity: .52;
+}
+
+.composer-tool:not(:disabled) {
+    cursor: pointer;
 }
 
 .composer-input {
@@ -1348,6 +1434,56 @@ textarea:focus-visible {
     font-size: 8px;
     text-align: center;
     padding-top: 6px;
+}
+
+.edit-cancel {
+    min-height: 34px;
+    padding: 0 8px;
+    border: 0;
+    color: var(--muted);
+    background: transparent;
+    font-size: 10px;
+    cursor: pointer;
+}
+
+.edit-cancel[hidden] {
+    display: none;
+}
+
+.emoji-picker {
+    position: absolute;
+    z-index: 8;
+    right: 24px;
+    bottom: 94px;
+    width: min(320px, calc(100% - 24px));
+    padding: 9px;
+    display: grid;
+    grid-template-columns: repeat(8, minmax(32px, 1fr));
+    gap: 3px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+}
+
+.emoji-picker[hidden] {
+    display: none;
+}
+
+.emoji-picker button {
+    min-width: 32px;
+    min-height: 36px;
+    padding: 0;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    font-size: 20px;
+    cursor: pointer;
+}
+
+.emoji-picker button:hover,
+.emoji-picker button:focus-visible {
+    background: var(--accent-pale);
 }
 
 .search-dialog {
@@ -1509,9 +1645,14 @@ textarea:focus-visible {
     }
 
     body.messenger-page .messenger {
-        height: calc(var(--mobile-viewport-height, 100dvh) - 64px);
-        height: min(calc(var(--mobile-viewport-height, 100dvh) - 64px), calc(100dvh - 64px));
+        position: fixed;
+        top: var(--mobile-chat-top, 64px);
+        right: 0;
+        left: 0;
+        width: 100%;
+        height: var(--mobile-chat-height, calc(100dvh - 64px));
         min-height: 0;
+        margin: 0;
     }
 
     .form-stack input,
@@ -1658,7 +1799,21 @@ textarea:focus-visible {
     .composer {
         margin: 0 11px;
         min-height: 59px;
-        padding: 8px;
+        padding: 8px 8px max(8px, env(safe-area-inset-bottom));
+    }
+
+    .message-content {
+        max-width: 88%;
+    }
+
+    .message-action {
+        width: 38px;
+        height: 34px;
+    }
+
+    .emoji-picker {
+        right: 12px;
+        bottom: calc(84px + env(safe-area-inset-bottom));
     }
 
     .composer-footnote {

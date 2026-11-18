@@ -76,5 +76,34 @@ def create_app(test_config=None):
 
     with app.app_context():
         db.create_all()
+        migrate_additive_columns()
 
     return app
+
+
+def migrate_additive_columns():
+    from .models import Message, User
+
+    database_url = str(db.engine.url)
+    if database_url in {"sqlite://", "sqlite:///:memory:"}:
+        return
+    inspector = db.inspect(db.engine)
+    dialect = db.engine.dialect.name
+    timestamp_type = "TIMESTAMP WITH TIME ZONE" if dialect == "postgresql" else "DATETIME"
+    additions = {
+        User.__tablename__: {"last_seen_at": timestamp_type},
+        Message.__tablename__: {"edited_at": timestamp_type},
+    }
+    with db.engine.begin() as connection:
+        for table_name, columns in additions.items():
+            existing = {column["name"]
+                        for column in inspector.get_columns(table_name)}
+            for column_name, column_type in columns.items():
+                if column_name not in existing:
+                    quoted_table = db.engine.dialect.identifier_preparer.quote(
+                        table_name)
+                    quoted_column = db.engine.dialect.identifier_preparer.quote(
+                        column_name)
+                    connection.exec_driver_sql(
+                        f"ALTER TABLE {quoted_table} ADD COLUMN {quoted_column} {column_type}"
+                    )

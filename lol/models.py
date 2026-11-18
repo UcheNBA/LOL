@@ -20,6 +20,7 @@ class User(UserMixin, db.Model):
     display_name = db.Column(db.String(80), nullable=False)
     avatar_url = db.Column(db.String(2048))
     about = db.Column(db.String(280), nullable=False, default="")
+    last_seen_at = db.Column(db.DateTime(timezone=True))
     created_at = db.Column(db.DateTime(timezone=True),
                            nullable=False, default=utcnow)
     updated_at = db.Column(db.DateTime(timezone=True),
@@ -95,6 +96,7 @@ class Message(db.Model):
     created_at = db.Column(db.DateTime(timezone=True),
                            nullable=False, default=utcnow)
     deleted_at = db.Column(db.DateTime(timezone=True))
+    edited_at = db.Column(db.DateTime(timezone=True))
     chat = db.relationship("Chat", back_populates="messages")
     sender = db.relationship("User")
     statuses = db.relationship(

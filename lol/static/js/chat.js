@@ -5,10 +5,15 @@
     document.body.classList.add("messenger-page");
     const updateMobileViewport = () => {
         if (window.matchMedia("(max-width: 820px)").matches) {
-            const viewportHeight = window.visualViewport?.height || window.innerHeight;
-            document.documentElement.style.setProperty("--mobile-viewport-height", `${viewportHeight}px`);
+            const viewport = window.visualViewport;
+            const viewportTop = viewport?.offsetTop || 0;
+            const viewportBottom = viewportTop + (viewport?.height || window.innerHeight);
+            const panelTop = Math.max(64, viewportTop);
+            document.documentElement.style.setProperty("--mobile-chat-top", `${panelTop}px`);
+            document.documentElement.style.setProperty("--mobile-chat-height", `${Math.max(0, viewportBottom - panelTop)}px`);
         } else {
-            document.documentElement.style.removeProperty("--mobile-viewport-height");
+            document.documentElement.style.removeProperty("--mobile-chat-top");
+            document.documentElement.style.removeProperty("--mobile-chat-height");
         }
     };
     updateMobileViewport();
@@ -29,6 +34,7 @@
     let loadingOlder = false;
     let hasMore = false;
     let oldestMessageId = null;
+    let editingMessageId = null;
     const renderedIds = new Set();
     const list = document.querySelector("#chat-list");
     const history = document.querySelector("#message-history");
@@ -36,8 +42,12 @@
     const composer = document.querySelector("#message-form");
     const input = document.querySelector("#message-input");
     const dialog = document.querySelector("#search-dialog");
+    const emojiPicker = document.querySelector("#emoji-picker");
+    const sendButton = document.querySelector("#send-button");
+    const editCancel = document.querySelector("#edit-cancel");
     const outboxKey = `lol-outbox-${userId}`;
     const socket = typeof window.io === "function" ? window.io({ reconnection: true, reconnectionDelayMax: 5000 }) : null;
+    const emojis = ["😀", "😂", "🥹", "😍", "😊", "😮", "😢", "🙏", "👏", "👍", "❤️", "🔥", "🎉", "✨", "💯", "☕"];
 
     const request = async (url, options = {}) => {
         const response = await fetch(url, {
@@ -57,6 +67,13 @@
     const formatClock = (date) => new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date(date));
     const isOwnMessage = (message) => Number(message.sender_id) === Number(userId);
     const isNearLatest = () => history.scrollHeight - history.scrollTop - history.clientHeight < 80;
+    const formatLastSeen = (value) => value
+        ? `last seen ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value))}`
+        : "last seen recently";
+
+    function presenceText(chat) {
+        return chat.online ? "online" : chat.last_seen_at ? formatLastSeen(chat.last_seen_at) : "offline";
+    }
 
     function renderChatRow(chat) {
         const active = Number(activeChat?.id) === Number(chat.id) ? " is-active" : "";
@@ -98,17 +115,32 @@
     }
 
     function addMessage(message, { scroll = false, prepend = false } = {}) {
-        if (renderedIds.has(String(message.client_id))) return;
+        if (renderedIds.has(String(message.client_id))) {
+            const existing = [...stream.querySelectorAll(".message-row")]
+                .find((item) => item.dataset.clientId === String(message.client_id));
+            if (existing && message.id) {
+                existing.dataset.messageId = message.id;
+                const mine = isOwnMessage(message);
+                const status = mine ? `<span class="message-status status-${message.status || "sent"}" data-message-id="${message.id}" aria-label="${message.status || "sent"}">${message.status === "read" || message.status === "delivered" ? "✓✓" : "✓"}</span>` : "";
+                const actions = `<div class="message-actions"><button class="message-action" type="button" data-action="react" data-message-id="${message.id}" aria-label="React to message" title="React">☺</button>${mine ? `<button class="message-action" type="button" data-action="edit" data-message-id="${message.id}" aria-label="Edit message" title="Edit">✎</button>` : ""}</div>`;
+                const reactions = (message.reactions || []).map((reaction) => reactionChip(message.id, reaction)).join("");
+                existing.innerHTML = `<div class="message-content"><div class="message-bubble"><p>${escapeHTML(message.body)}</p><footer>${message.edited ? '<span class="message-edited">edited</span>' : ""}<time>${escapeHTML(message.time || formatClock(message.created_at))}</time>${status}</footer></div>${actions}<div class="reaction-list" data-reactions-for="${message.id}">${reactions}</div></div>`;
+                if (mine && message.status) updateStatus(message.id, message.status);
+            }
+            return;
+        }
         renderedIds.add(String(message.client_id));
         const mine = isOwnMessage(message);
         const wasNearLatest = isNearLatest();
         const shouldMarkRead = !mine && document.visibilityState === "visible" && wasNearLatest;
         const status = mine ? `<span class="message-status status-${message.status || "sent"}" data-message-id="${message.id || ""}" aria-label="${message.status || "sent"}">${message.status === "read" ? "✓✓" : message.status === "delivered" ? "✓✓" : "✓"}</span>` : "";
+        const reactions = (message.reactions || []).map((reaction) => reactionChip(message.id, reaction)).join("");
+        const actions = message.id ? `<div class="message-actions"><button class="message-action" type="button" data-action="react" data-message-id="${message.id}" aria-label="React to message" title="React">☺</button>${mine ? `<button class="message-action" type="button" data-action="edit" data-message-id="${message.id}" aria-label="Edit message" title="Edit">✎</button>` : ""}</div>` : "";
         const row = document.createElement("article");
         row.className = `message-row ${mine ? "message-mine" : "message-theirs"}`;
         row.dataset.messageId = message.id || "";
         row.dataset.clientId = message.client_id;
-        row.innerHTML = `<div class="message-bubble"><p>${escapeHTML(message.body)}</p><footer><time>${escapeHTML(message.time || formatClock(message.created_at))}</time>${status}</footer></div>`;
+        row.innerHTML = `<div class="message-content"><div class="message-bubble"><p>${escapeHTML(message.body)}</p><footer>${message.edited ? '<span class="message-edited">edited</span>' : ""}<time>${escapeHTML(message.time || formatClock(message.created_at))}</time>${status}</footer></div>${actions}<div class="reaction-list" data-reactions-for="${message.id || ""}">${reactions}</div></div>`;
         if (prepend) stream.prepend(row);
         else stream.append(row);
         if (message.id && !mine && socket && activeChat) {
@@ -116,6 +148,95 @@
         }
         if (mine && message.id && message.status) updateStatus(message.id, message.status);
         if (scroll && (mine || wasNearLatest)) history.scrollTop = history.scrollHeight;
+    }
+
+    function reactionChip(messageId, reaction) {
+        return `<button class="reaction-chip${reaction.reacted ? " is-selected" : ""}" type="button" data-action="react-chip" data-message-id="${messageId}" data-emoji="${escapeAttribute(reaction.emoji)}" aria-label="${escapeAttribute(reaction.emoji)} reaction, ${reaction.count}">${escapeHTML(reaction.emoji)} <span>${reaction.count}</span></button>`;
+    }
+
+    function renderReactionList(messageId, reactions) {
+        const container = stream.querySelector(`[data-reactions-for="${messageId}"]`);
+        if (container) container.innerHTML = reactions.map((reaction) => reactionChip(messageId, reaction)).join("");
+    }
+
+    function updateMessage(message) {
+        const row = stream.querySelector(`[data-message-id="${message.id}"]`);
+        if (!row) return;
+        const body = row.querySelector(".message-bubble p");
+        body.textContent = message.body;
+        let edited = row.querySelector(".message-edited");
+        if (!edited) {
+            edited = document.createElement("span");
+            edited.className = "message-edited";
+            edited.textContent = "edited";
+            row.querySelector(".message-bubble footer").prepend(edited);
+        }
+        const chat = chats.find((item) => Number(item.id) === Number(message.chat_id));
+        if (chat?.last_message_id === message.id) {
+            chat.preview = message.body;
+            renderChatList();
+        }
+    }
+
+    function setPresence(data) {
+        const chat = chats.find((item) => Number(item.other_user_id) === Number(data.user_id));
+        if (!chat) return;
+        chat.online = data.online;
+        chat.last_seen_at = data.last_seen_at;
+        if (Number(activeChat?.id) === Number(chat.id)) {
+            const label = document.querySelector("#active-presence");
+            label.textContent = presenceText(chat);
+            label.classList.toggle("is-online", Boolean(chat.online));
+        }
+    }
+
+    function openEmojiPicker(mode, messageId = null) {
+        emojiPicker.dataset.mode = mode;
+        emojiPicker.dataset.messageId = messageId || "";
+        emojiPicker.innerHTML = emojis.map((emoji) => `<button type="button" data-emoji="${emoji}" aria-label="${emoji}">${emoji}</button>`).join("");
+        emojiPicker.hidden = false;
+    }
+
+    function closeEmojiPicker() {
+        emojiPicker.hidden = true;
+        delete emojiPicker.dataset.mode;
+        delete emojiPicker.dataset.messageId;
+    }
+
+    function sendReaction(messageId, emoji) {
+        if (!socket?.connected) {
+            showToast("Reconnect to react to messages.");
+            return;
+        }
+        socket.emit("message:react", { message_id: Number(messageId), emoji }, (result) => {
+            if (!result?.ok) {
+                showToast(result?.error || "Reaction could not be saved.");
+                return;
+            }
+            renderReactionList(messageId, result.reactions);
+        });
+    }
+
+    function startEditing(messageId) {
+        const row = stream.querySelector(`.message-row[data-message-id="${messageId}"]`);
+        if (!row) return;
+        editingMessageId = Number(messageId);
+        input.value = row.querySelector(".message-bubble p").textContent;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        sendButton.setAttribute("aria-label", "Save edited message");
+        sendButton.title = "Save edit";
+        editCancel.hidden = false;
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+    }
+
+    function cancelEditing() {
+        editingMessageId = null;
+        input.value = "";
+        input.style.height = "auto";
+        sendButton.setAttribute("aria-label", "Send message");
+        sendButton.title = "Send message";
+        editCancel.hidden = true;
     }
 
     function updateStatus(messageId, status) {
@@ -150,6 +271,9 @@
         document.querySelector("#conversation-active").hidden = false;
         document.querySelector("#active-title").textContent = chat.title;
         document.querySelector("#active-subtitle").textContent = chat.username ? `@${chat.username}` : "A direct conversation";
+        const presence = document.querySelector("#active-presence");
+        presence.textContent = presenceText(chat);
+        presence.classList.toggle("is-online", Boolean(chat.online));
         const avatar = document.querySelector("#active-avatar");
         avatar.innerHTML = avatarHTML(chat);
         avatar.className = "avatar avatar-current";
@@ -172,7 +296,6 @@
         } catch (error) {
             showToast(error.message);
         }
-        input.focus();
     }
 
     function readOutbox() {
@@ -182,7 +305,11 @@
     function saveOutbox(messages) { localStorage.setItem(outboxKey, JSON.stringify(messages.slice(-100))); }
 
     function sendQueuedMessage(message) {
-        if (!socket?.connected) return;
+        if (!socket) return;
+        if (!socket.connected) {
+            socket.connect();
+            return;
+        }
         socket.emit("message:send", message, (result) => {
             if (!result?.ok) {
                 showToast(result?.error || "Message could not be sent.");
@@ -266,10 +393,55 @@
         }
     });
     document.querySelector("#back-to-list").addEventListener("click", () => shell.classList.remove("chat-open"));
+    document.querySelector("#emoji-toggle").addEventListener("click", () => {
+        if (emojiPicker.hidden) openEmojiPicker("composer");
+        else closeEmojiPicker();
+    });
+    emojiPicker.addEventListener("click", (event) => {
+        const button = event.target.closest("[data-emoji]");
+        if (!button) return;
+        const emoji = button.dataset.emoji;
+        if (emojiPicker.dataset.mode === "reaction") {
+            sendReaction(emojiPicker.dataset.messageId, emoji);
+        } else {
+            const start = input.selectionStart;
+            const end = input.selectionEnd;
+            input.setRangeText(emoji, start, end, "end");
+            input.dispatchEvent(new Event("input", { bubbles: true }));
+            input.focus();
+        }
+        closeEmojiPicker();
+    });
+    stream.addEventListener("click", (event) => {
+        const action = event.target.closest("[data-action]");
+        if (!action) return;
+        const { messageId } = action.dataset;
+        if (action.dataset.action === "edit") startEditing(messageId);
+        if (action.dataset.action === "react") openEmojiPicker("reaction", messageId);
+        if (action.dataset.action === "react-chip") sendReaction(messageId, action.dataset.emoji);
+    });
+    document.addEventListener("click", (event) => {
+        if (!emojiPicker.hidden && !event.target.closest("#emoji-picker, #emoji-toggle, [data-action='react']")) {
+            closeEmojiPicker();
+        }
+    });
+    editCancel.addEventListener("click", cancelEditing);
     composer.addEventListener("submit", (event) => {
         event.preventDefault();
         const body = input.value.trim();
-        if (!body || !activeChat) return;
+        if (!body) return;
+        if (editingMessageId) {
+            socket?.emit("message:edit", { message_id: editingMessageId, body }, (result) => {
+                if (!result?.ok) {
+                    showToast(result?.error || "Message could not be edited.");
+                    return;
+                }
+                updateMessage(result.message);
+                cancelEditing();
+            });
+            return;
+        }
+        if (!activeChat) return;
         const message = { chat_id: activeChat.id, body, client_id: crypto.randomUUID() };
         input.value = "";
         input.style.height = "auto";
@@ -305,6 +477,9 @@
             else if (!isOwnMessage(message)) socket.emit("message:received", { message_id: message.id, read: false });
         });
         socket.on("message:status", (data) => updateStatus(data.message_id, data.status));
+        socket.on("message:updated", updateMessage);
+        socket.on("message:reactions", (data) => renderReactionList(data.message_id, data.reactions));
+        socket.on("presence:update", setPresence);
         socket.on("chat:activity", async () => {
             try {
                 const data = await request("/api/chats");

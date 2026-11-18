@@ -52,8 +52,8 @@
                     aria-label="Back to conversations">←</button><span class="avatar avatar-current"
                     id="active-avatar">?</span>
                 <div class="conversation-person"><strong id="active-title">Conversation</strong><small
-                        id="active-subtitle">@username</small></div><span class="head-decoration"
-                    aria-hidden="true">•••</span>
+                        id="active-subtitle">@username</small><small class="presence-label"
+                        id="active-presence"></small></div><span class="head-decoration" aria-hidden="true">•••</span>
             </header>
             <div class="message-history" id="message-history" role="log" aria-label="Messages" aria-live="polite"
                 tabindex="0">
@@ -61,14 +61,16 @@
                 <div class="message-date">TODAY</div>
                 <div class="message-stream" id="message-stream"></div>
             </div>
-            <form class="composer" id="message-form"><button class="composer-tool" type="button"
-                    aria-label="Attachments are coming soon" title="Attachments coming soon" disabled>＋</button><label
-                    class="composer-input"><span class="sr-only">Write a message</span><textarea id="message-input"
-                        rows="1" maxlength="4000" placeholder="Write a message…"
-                        autocomplete="off"></textarea></label><button class="send-button" type="submit"
-                    aria-label="Send message" title="Send message"><span aria-hidden="true">↗</span></button></form>
+            <form class="composer" id="message-form"><button class="composer-tool" id="emoji-toggle" type="button"
+                    aria-label="Insert emoji" title="Insert emoji">☺</button><label class="composer-input"><span
+                        class="sr-only">Write a message</span><textarea id="message-input" rows="1" maxlength="4000"
+                        placeholder="Write a message…" autocomplete="off"></textarea></label><button class="edit-cancel"
+                    id="edit-cancel" type="button" hidden aria-label="Cancel edit">Cancel</button><button
+                    class="send-button" id="send-button" type="submit" aria-label="Send message"
+                    title="Send message"><span aria-hidden="true">↗</span></button></form>
             <p class="composer-footnote">A good thought is always worth sending.</p>
         </div>
+        <div class="emoji-picker" id="emoji-picker" role="toolbar" aria-label="Emoji picker" hidden></div>
     </section>
 </section>
 <dialog class="search-dialog" id="search-dialog" aria-labelledby="search-title">
