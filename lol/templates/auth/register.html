@@ -1,0 +1,28 @@
+{% extends 'base.html' %}
+{% block title %}Create account | LOL{% endblock %}
+{% block content %}
+<section class="auth-layout">
+    <div class="auth-aside">
+        <p class="eyebrow">MAKE IT A GOOD ONE</p>
+        <h1>More LOL.<br><em>Less distance.</em></h1>
+        <p>Your next favorite conversation starts with a hello.</p>
+    </div>
+    <div class="auth-panel">
+        <p class="eyebrow">GET STARTED</p>
+        <h2>Create account</h2>
+        <form method="post" class="form-stack"><input type="hidden" name="csrf_token"
+                value="{{ csrf_token() }}"><label>Your name<input name="display_name" maxlength="80" autocomplete="name"
+                    required></label><label>Username<input name="username" minlength="3" maxlength="32"
+                    pattern="[A-Za-z0-9_]+" autocomplete="username" required><small>3–32 letters, numbers, or
+                    underscores</small></label>
+            <div class="form-split"><label>Email<input type="email" name="email" maxlength="254"
+                        autocomplete="email"></label><label>Phone<input type="tel" name="phone" maxlength="32"
+                        autocomplete="tel"></label></div><small>Provide an email or phone number. Email is needed for
+                password recovery.</small><label>Password<input type="password" name="password" minlength="10"
+                    autocomplete="new-password" required><small>At least 10 characters</small></label><button
+                class="button button-primary" type="submit">Create account <span aria-hidden="true">↗</span></button>
+        </form>
+        <p class="auth-bottom">Already a member? <a href="{{ url_for('auth.login') }}">Log in</a></p>
+    </div>
+</section>
+{% endblock %}

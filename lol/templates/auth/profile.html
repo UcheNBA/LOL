@@ -1,0 +1,23 @@
+{% extends 'base.html' %}
+{% block title %}Your profile | LOL{% endblock %}
+{% block content %}
+<section class="auth-layout">
+    <div class="auth-aside">
+        <p class="eyebrow">YOUR LOL PROFILE</p>
+        <h1>Show up as<br><em>yourself.</em></h1>
+        <p>Your profile helps people know they've found the right you.</p>
+    </div>
+    <div class="auth-panel">
+        <p class="eyebrow">PROFILE DETAILS</p>
+        <h2>Edit profile</h2>
+        <form method="post" class="form-stack"><input type="hidden" name="csrf_token"
+                value="{{ csrf_token() }}"><label>Display name<input name="display_name"
+                    value="{{ current_user.display_name }}" maxlength="80" required></label><label>Photo URL<input
+                    type="url" name="avatar_url" value="{{ current_user.avatar_url or '' }}" maxlength="2048"
+                    placeholder="https://..."><small>Image uploads arrive in a later
+                    milestone.</small></label><label>About<textarea name="about" maxlength="280"
+                    rows="3">{{ current_user.about }}</textarea></label><button class="button button-primary"
+                type="submit">Save profile <span aria-hidden="true">↗</span></button></form>
+    </div>
+</section>
+{% endblock %}

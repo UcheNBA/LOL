@@ -1,0 +1,52 @@
+{% extends 'base.html' %}
+{% block content %}
+<section class="landing-shell">
+    <div class="landing-copy">
+        <p class="eyebrow"><span class="status-dot"></span> YOUR PEOPLE, RIGHT HERE</p>
+        <h1>Good chats.<br><em>Great timing.</em></h1>
+        <p class="landing-intro">A little closer, wherever life has you. Catch up, make plans, or send the thought you
+            almost forgot.</p>
+        {% if current_user.is_authenticated %}
+        <a class="button button-primary" href="{{ url_for('main.index') }}#chats">Open your chats <span
+                aria-hidden="true">↗</span></a>
+        {% else %}
+        <a class="button button-primary" href="{{ url_for('auth.register') }}">Start chatting <span
+                aria-hidden="true">↗</span></a>
+        <p class="sub-action">Already have an account? <a href="{{ url_for('auth.login') }}">Log in</a></p>
+        {% endif %}
+        <div class="landing-rule"></div>
+        <div class="landing-note"><span class="note-number">01</span><span>Small conversations<br>make a big day.</span>
+        </div>
+    </div>
+    <div class="chat-art" aria-label="Illustration of a LOL conversation">
+        <div class="art-label"><span>FRIDAY, 10:42 AM</span><span class="art-live"><i></i> ONLINE</span></div>
+        <div class="art-person"><span class="avatar avatar-maya">M</span>
+            <div><strong>Maya Chen</strong><small>probably on her way</small></div><span class="art-menu">···</span>
+        </div>
+        <div class="art-chat">
+            <div class="art-message received">Coffee after work? <span>10:39</span></div>
+            <div class="art-message sent">Only if you pick the place <span>10:40&nbsp; ✓✓</span></div>
+            <div class="art-message received">Already found our spot <span>10:41</span></div>
+            <div class="art-message sent art-last">You always do ☕ <span>10:42&nbsp; <b>✓✓</b></span></div>
+            <div class="art-reaction" aria-label="Heart reaction">♥ <small>1</small></div>
+        </div>
+        <div class="art-compose"><span>Write a message</span><span class="compose-send" aria-hidden="true">↗</span>
+        </div>
+        <div class="art-sticker" aria-hidden="true">lol<span>.</span></div>
+    </div>
+</section>
+<section class="feature-strip" aria-label="Features">
+    <article class="feature-item"><span class="feature-index">01 / REAL TIME</span>
+        <h2>Right now means now.</h2>
+        <p>Messages land as they happen, with delivery and read receipts.</p>
+    </article>
+    <article class="feature-item"><span class="feature-index">02 / YOUR CIRCLE</span>
+        <h2>Find your people.</h2>
+        <p>Search by username, email, or phone to start a direct conversation.</p>
+    </article>
+    <article class="feature-item"><span class="feature-index">03 / YOUR SPACE</span>
+        <h2>Make it yours.</h2>
+        <p>Set your name, photo, and about line. Switch themes whenever.</p>
+    </article>
+</section>
+{% endblock %}

@@ -1,0 +1,86 @@
+{% extends 'base.html' %}
+{% block title %}Messages | LOL{% endblock %}
+{% block content %}
+<section class="messenger" id="chats" data-user-id="{{ current_user.id }}">
+    <aside class="chat-sidebar" aria-label="Your conversations">
+        <div class="sidebar-head">
+            <div>
+                <p class="eyebrow">YOUR CORNER OF THE INTERNET</p>
+                <h1>Messages<span class="wordmark-period">.</span></h1>
+            </div><button class="icon-button new-chat-button" type="button" title="Start a chat"
+                aria-label="Start a chat">＋</button>
+        </div>
+        <label class="chat-search"><span aria-hidden="true">⌕</span><input id="chat-filter" type="search"
+                placeholder="Search conversations" autocomplete="off" aria-label="Search conversations"></label>
+        <div class="chat-list" id="chat-list" role="list" aria-label="Conversations">
+            {% for chat in chats %}
+            <button class="chat-row" type="button" role="listitem" data-chat-id="{{ chat.id }}"
+                data-search="{{ (chat.title ~ ' ' ~ chat.username) | lower }}">
+                <span
+                    class="avatar{% if loop.index % 4 == 0 %} avatar-coral{% elif loop.index % 4 == 1 %} avatar-sky{% elif loop.index % 4 == 2 %} avatar-leaf{% else %} avatar-lilac{% endif %}">{%
+                    if chat.avatar_url %}<img src="{{ chat.avatar_url }}" alt="">{% else %}{{ chat.initial }}{% endif
+                    %}</span>
+                <span class="chat-row-copy"><span class="chat-row-top"><strong>{{ chat.title }}</strong><time>{{
+                            chat.time }}</time></span><span class="chat-row-bottom"><span class="chat-preview">{{
+                            chat.preview }}</span>{% if chat.unread %}<span class="unread-badge">{{ chat.unread
+                            }}</span>{% endif %}</span></span>
+            </button>
+            {% endfor %}
+            <div class="empty-list" id="empty-list" {% if chats %}hidden{% endif %}><span
+                    class="empty-graphic">↗</span><strong>Your chats will live here.</strong>
+                <p>Search for someone and say hello.</p><button class="text-button new-chat-button" type="button">Find a
+                    person</button>
+            </div>
+            <p class="no-results" id="no-results" hidden>No conversations match that search.</p>
+        </div>
+        <div class="sidebar-foot"><span class="avatar avatar-self">{{ current_user.display_name[:1] | upper }}</span>
+            <div class="self-label"><strong>{{ current_user.display_name }}</strong><small>@{{ current_user.username
+                    }}</small></div><a class="profile-shortcut" href="{{ url_for('auth.profile') }}"
+                aria-label="Edit profile" title="Edit profile">↗</a>
+        </div>
+    </aside>
+    <section class="conversation" id="conversation" aria-label="Conversation" aria-live="off">
+        <div class="conversation-empty" id="conversation-empty">
+            <div class="empty-mark">lol<span>.</span></div>
+            <h2>Make a little connection.</h2>
+            <p>Pick up a conversation or find someone new.</p><button class="button button-primary new-chat-button"
+                type="button">Find someone <span aria-hidden="true">↗</span></button>
+            <div class="end-to-end-note"><span aria-hidden="true">⌁</span> YOUR MESSAGES, JUST BETWEEN YOU</div>
+        </div>
+        <div class="conversation-active" id="conversation-active" hidden>
+            <header class="conversation-head"><button class="icon-button back-button" id="back-to-list" type="button"
+                    aria-label="Back to conversations">←</button><span class="avatar avatar-current"
+                    id="active-avatar">?</span>
+                <div class="conversation-person"><strong id="active-title">Conversation</strong><small
+                        id="active-subtitle">@username</small></div><span class="head-decoration"
+                    aria-hidden="true">•••</span>
+            </header>
+            <div class="message-history" id="message-history" role="log" aria-label="Messages" aria-live="polite"
+                tabindex="0">
+                <div class="history-top" id="history-top"></div>
+                <div class="message-date">TODAY</div>
+                <div class="message-stream" id="message-stream"></div>
+            </div>
+            <form class="composer" id="message-form"><button class="composer-tool" type="button"
+                    aria-label="Attachments are coming soon" title="Attachments coming soon" disabled>＋</button><label
+                    class="composer-input"><span class="sr-only">Write a message</span><textarea id="message-input"
+                        rows="1" maxlength="4000" placeholder="Write a message…"
+                        autocomplete="off"></textarea></label><button class="send-button" type="submit"
+                    aria-label="Send message" title="Send message"><span aria-hidden="true">↗</span></button></form>
+            <p class="composer-footnote">A good thought is always worth sending.</p>
+        </div>
+    </section>
+</section>
+<dialog class="search-dialog" id="search-dialog" aria-labelledby="search-title">
+    <form method="dialog" class="dialog-dismiss"><button class="icon-button" aria-label="Close search">×</button></form>
+    <p class="eyebrow">NEW CONVERSATION</p>
+    <h2 id="search-title">Who’s on your mind?</h2><label class="people-search"><span aria-hidden="true">⌕</span><input
+            id="people-query" type="search" placeholder="Name, username, email, or phone" autocomplete="off"></label>
+    <div class="people-results" id="people-results" aria-live="polite">
+        <p class="search-hint">Type at least 2 characters to find people.</p>
+    </div>
+</dialog>
+<script src="https://cdn.socket.io/4.8.1/socket.io.min.js" crossorigin="anonymous"></script>
+<script id="initial-chats" type="application/json">{{ chats | tojson }}</script>
+<script defer src="{{ url_for('static', filename='js/chat.js') }}"></script>
+{% endblock %}

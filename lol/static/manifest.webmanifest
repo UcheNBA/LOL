@@ -1,0 +1,17 @@
+{
+    "name": "LOL Messages",
+    "short_name": "LOL",
+    "description": "A little closer, wherever life has you.",
+    "start_url": "/",
+    "display": "standalone",
+    "background_color": "#f6f8f5",
+    "theme_color": "#00a884",
+    "icons": [
+        {
+            "src": "/static/icons/lol.svg",
+            "sizes": "any",
+            "type": "image/svg+xml",
+            "purpose": "any maskable"
+        }
+    ]
+}
