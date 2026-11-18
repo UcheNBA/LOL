@@ -1493,6 +1493,28 @@ textarea:focus-visible {
 }
 
 @media (max-width: 820px) {
+    body.messenger-page {
+        overflow: hidden;
+    }
+
+    body.messenger-page .site-footer {
+        display: none;
+    }
+
+    body.messenger-page .messenger {
+        height: calc(var(--mobile-viewport-height, 100dvh) - 64px);
+        height: min(calc(var(--mobile-viewport-height, 100dvh) - 64px), calc(100dvh - 64px));
+        min-height: 0;
+    }
+
+    .form-stack input,
+    .form-stack textarea,
+    .chat-search input,
+    .people-search input,
+    .composer-input textarea {
+        font-size: 16px;
+    }
+
     .topbar {
         height: 64px;
         padding: 0 18px;

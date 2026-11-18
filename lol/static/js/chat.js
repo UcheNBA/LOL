@@ -2,6 +2,25 @@
     const shell = document.querySelector(".messenger");
     if (!shell) return;
 
+    document.body.classList.add("messenger-page");
+    const updateMobileViewport = () => {
+        if (window.matchMedia("(max-width: 820px)").matches) {
+            const viewportHeight = window.visualViewport?.height || window.innerHeight;
+            document.documentElement.style.setProperty("--mobile-viewport-height", `${viewportHeight}px`);
+        } else {
+            document.documentElement.style.removeProperty("--mobile-viewport-height");
+        }
+    };
+    updateMobileViewport();
+    window.addEventListener("resize", updateMobileViewport);
+    window.addEventListener("focus", updateMobileViewport);
+    window.visualViewport?.addEventListener("resize", updateMobileViewport);
+    window.visualViewport?.addEventListener("scroll", updateMobileViewport);
+    document.addEventListener("focusin", () => {
+        updateMobileViewport();
+        window.setTimeout(updateMobileViewport, 250);
+    });
+
     const csrf = document.querySelector('meta[name="csrf-token"]').content;
     const userId = shell.dataset.userId;
     const initialChats = JSON.parse(document.querySelector("#initial-chats").textContent);
