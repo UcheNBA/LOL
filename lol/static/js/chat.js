@@ -55,6 +55,8 @@
     const escapeHTML = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
     const escapeAttribute = escapeHTML;
     const formatClock = (date) => new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date(date));
+    const isOwnMessage = (message) => Number(message.sender_id) === Number(userId);
+    const isNearLatest = () => history.scrollHeight - history.scrollTop - history.clientHeight < 80;
 
     function renderChatRow(chat) {
         const active = Number(activeChat?.id) === Number(chat.id) ? " is-active" : "";
@@ -89,26 +91,31 @@
         chat.preview = message.body;
         chat.time = formatClock(message.created_at);
         chat.updated_at = message.created_at;
-        if (!message.mine && Number(activeChat?.id) !== Number(chatId)) chat.unread = (chat.unread || 0) + 1;
+        if (!isOwnMessage(message) && (Number(activeChat?.id) !== Number(chatId) || !isNearLatest())) {
+            chat.unread = (chat.unread || 0) + 1;
+        }
         renderChatList();
     }
 
     function addMessage(message, { scroll = false, prepend = false } = {}) {
         if (renderedIds.has(String(message.client_id))) return;
         renderedIds.add(String(message.client_id));
-        const status = message.mine ? `<span class="message-status status-${message.status || "sent"}" data-message-id="${message.id || ""}" aria-label="${message.status || "sent"}">${message.status === "read" ? "✓✓" : message.status === "delivered" ? "✓✓" : "✓"}</span>` : "";
+        const mine = isOwnMessage(message);
+        const wasNearLatest = isNearLatest();
+        const shouldMarkRead = !mine && document.visibilityState === "visible" && wasNearLatest;
+        const status = mine ? `<span class="message-status status-${message.status || "sent"}" data-message-id="${message.id || ""}" aria-label="${message.status || "sent"}">${message.status === "read" ? "✓✓" : message.status === "delivered" ? "✓✓" : "✓"}</span>` : "";
         const row = document.createElement("article");
-        row.className = `message-row ${message.mine ? "message-mine" : "message-theirs"}`;
+        row.className = `message-row ${mine ? "message-mine" : "message-theirs"}`;
         row.dataset.messageId = message.id || "";
         row.dataset.clientId = message.client_id;
         row.innerHTML = `<div class="message-bubble"><p>${escapeHTML(message.body)}</p><footer><time>${escapeHTML(message.time || formatClock(message.created_at))}</time>${status}</footer></div>`;
         if (prepend) stream.prepend(row);
         else stream.append(row);
-        if (message.id && !message.mine && socket && activeChat) {
-            socket.emit("message:received", { message_id: message.id, read: document.visibilityState === "visible" });
+        if (message.id && !mine && socket && activeChat) {
+            socket.emit("message:received", { message_id: message.id, read: shouldMarkRead });
         }
-        if (message.mine && message.id && message.status) updateStatus(message.id, message.status);
-        if (scroll) history.scrollTop = history.scrollHeight;
+        if (mine && message.id && message.status) updateStatus(message.id, message.status);
+        if (scroll && (mine || wasNearLatest)) history.scrollTop = history.scrollHeight;
     }
 
     function updateStatus(messageId, status) {
@@ -127,7 +134,7 @@
         if (data.messages.length) {
             if (before) {
                 const oldHeight = history.scrollHeight;
-                data.messages.forEach((message) => addMessage(message, { prepend: true }));
+                [...data.messages].reverse().forEach((message) => addMessage(message, { prepend: true }));
                 history.scrollTop += history.scrollHeight - oldHeight;
             } else {
                 data.messages.forEach((message) => addMessage(message));
@@ -266,7 +273,7 @@
         const message = { chat_id: activeChat.id, body, client_id: crypto.randomUUID() };
         input.value = "";
         input.style.height = "auto";
-        const pending = { ...message, created_at: new Date().toISOString(), time: formatClock(new Date()), mine: true, status: "sent" };
+        const pending = { ...message, sender_id: Number(userId), created_at: new Date().toISOString(), time: formatClock(new Date()), status: "sent" };
         addMessage(pending, { scroll: true });
         const queue = readOutbox();
         queue.push(message);
@@ -295,7 +302,7 @@
         socket.on("message:new", (message) => {
             updateChatSummary(message.chat_id, message);
             if (Number(activeChat?.id) === Number(message.chat_id)) addMessage(message, { scroll: true });
-            else if (!message.mine) socket.emit("message:received", { message_id: message.id, read: false });
+            else if (!isOwnMessage(message)) socket.emit("message:received", { message_id: message.id, read: false });
         });
         socket.on("message:status", (data) => updateStatus(data.message_id, data.status));
         socket.on("chat:activity", async () => {

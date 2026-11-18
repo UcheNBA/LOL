@@ -163,3 +163,36 @@ def test_joining_chat_marks_pending_messages_read(app, users):
         assert status.read_at is not None
         assert member.last_read_at is not None
     socket_client.disconnect()
+
+
+def test_message_history_paginates_older_messages_in_order(app, users):
+    first_id, second_id, _ = users
+    client = signed_in_client(app, "first_user")
+    chat_id = client.post(
+        "/api/chats", json={"user_id": second_id}).json["chat_id"]
+    with app.app_context():
+        db.session.add_all([
+            Message(
+                chat_id=chat_id,
+                sender_id=first_id if index % 2 == 0 else second_id,
+                body=f"History message {index}",
+                client_id=f"history-page-{index}",
+            )
+            for index in range(1, 36)
+        ])
+        db.session.commit()
+
+    newest = client.get(f"/api/chats/{chat_id}/messages").json
+    assert len(newest["messages"]) == 30
+    assert newest["has_more"] is True
+    assert newest["messages"][0]["body"] == "History message 6"
+    assert newest["messages"][-1]["body"] == "History message 35"
+
+    older = client.get(
+        f"/api/chats/{chat_id}/messages?before={newest['messages'][0]['id']}"
+    ).json
+    assert len(older["messages"]) == 5
+    assert older["has_more"] is False
+    assert [message["body"] for message in older["messages"]] == [
+        f"History message {index}" for index in range(1, 6)
+    ]

@@ -748,6 +748,7 @@ textarea:focus-visible {
     width: calc(100% - 32px);
     max-width: 1440px;
     display: grid;
+    grid-template-rows: minmax(0, 1fr);
     grid-template-columns: minmax(300px, 370px) minmax(0, 1fr);
     overflow: hidden;
     border: 1px solid var(--line);
@@ -1037,6 +1038,8 @@ textarea:focus-visible {
 .conversation {
     position: relative;
     min-width: 0;
+    min-height: 0;
+    overflow: hidden;
     background-color: #eaf3ed;
     background-image: radial-gradient(rgba(0, 168, 132, .09) .8px, transparent .8px), radial-gradient(rgba(26, 93, 72, .045) .8px, transparent .8px);
     background-position: 0 0, 9px 9px;
@@ -1100,8 +1103,10 @@ textarea:focus-visible {
 
 .conversation-active {
     height: 100%;
+    min-height: 0;
     display: flex;
     flex-direction: column;
+    overflow: hidden;
 }
 
 .conversation-head {
@@ -1154,6 +1159,8 @@ textarea:focus-visible {
     min-height: 0;
     padding: 20px clamp(15px, 4vw, 54px);
     overflow-y: auto;
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
     scrollbar-color: rgba(67, 117, 91, .2) transparent;
     scrollbar-width: thin;
 }
