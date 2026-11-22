@@ -48,6 +48,7 @@
     const outboxKey = `lol-outbox-${userId}`;
     const socket = typeof window.io === "function" ? window.io({ reconnection: true, reconnectionDelayMax: 5000 }) : null;
     const emojis = ["😀", "😂", "🥹", "😍", "😊", "😮", "😢", "🙏", "👏", "👍", "❤️", "🔥", "🎉", "✨", "💯", "☕"];
+    const reactionEmojis = ["❤️", "😂", "👍", "😮", "😢", "🙏", "🔥", "🎉"];
 
     const request = async (url, options = {}) => {
         const response = await fetch(url, {
@@ -122,7 +123,7 @@
                 existing.dataset.messageId = message.id;
                 const mine = isOwnMessage(message);
                 const status = mine ? `<span class="message-status status-${message.status || "sent"}" data-message-id="${message.id}" aria-label="${message.status || "sent"}">${message.status === "read" || message.status === "delivered" ? "✓✓" : "✓"}</span>` : "";
-                const actions = `<div class="message-actions"><button class="message-action" type="button" data-action="react" data-message-id="${message.id}" aria-label="React to message" title="React">☺</button>${mine ? `<button class="message-action" type="button" data-action="edit" data-message-id="${message.id}" aria-label="Edit message" title="Edit">✎</button>` : ""}</div>`;
+                const actions = `<div class="message-actions"><button class="message-action" type="button" data-action="react" data-message-id="${message.id}" aria-label="React to message" title="React">＋</button>${mine ? `<button class="message-action" type="button" data-action="edit" data-message-id="${message.id}" aria-label="Edit message" title="Edit">✎</button>` : ""}</div>`;
                 const reactions = (message.reactions || []).map((reaction) => reactionChip(message.id, reaction)).join("");
                 existing.innerHTML = `<div class="message-content"><div class="message-bubble"><p>${escapeHTML(message.body)}</p><footer>${message.edited ? '<span class="message-edited">edited</span>' : ""}<time>${escapeHTML(message.time || formatClock(message.created_at))}</time>${status}</footer></div>${actions}<div class="reaction-list" data-reactions-for="${message.id}">${reactions}</div></div>`;
                 if (mine && message.status) updateStatus(message.id, message.status);
@@ -135,7 +136,7 @@
         const shouldMarkRead = !mine && document.visibilityState === "visible" && wasNearLatest;
         const status = mine ? `<span class="message-status status-${message.status || "sent"}" data-message-id="${message.id || ""}" aria-label="${message.status || "sent"}">${message.status === "read" ? "✓✓" : message.status === "delivered" ? "✓✓" : "✓"}</span>` : "";
         const reactions = (message.reactions || []).map((reaction) => reactionChip(message.id, reaction)).join("");
-        const actions = message.id ? `<div class="message-actions"><button class="message-action" type="button" data-action="react" data-message-id="${message.id}" aria-label="React to message" title="React">☺</button>${mine ? `<button class="message-action" type="button" data-action="edit" data-message-id="${message.id}" aria-label="Edit message" title="Edit">✎</button>` : ""}</div>` : "";
+        const actions = message.id ? `<div class="message-actions"><button class="message-action" type="button" data-action="react" data-message-id="${message.id}" aria-label="React to message" title="React">＋</button>${mine ? `<button class="message-action" type="button" data-action="edit" data-message-id="${message.id}" aria-label="Edit message" title="Edit">✎</button>` : ""}</div>` : "";
         const row = document.createElement("article");
         row.className = `message-row ${mine ? "message-mine" : "message-theirs"}`;
         row.dataset.messageId = message.id || "";
@@ -190,15 +191,59 @@
         }
     }
 
-    function openEmojiPicker(mode, messageId = null) {
+    /* ---------- Emoji pickers (composer grid + circular reaction ring) ---------- */
+
+    function openEmojiPicker(mode, messageId = null, point = null) {
         emojiPicker.dataset.mode = mode;
         emojiPicker.dataset.messageId = messageId || "";
-        emojiPicker.innerHTML = emojis.map((emoji) => `<button type="button" data-emoji="${emoji}" aria-label="${emoji}">${emoji}</button>`).join("");
+        if (mode === "reaction") {
+            renderRadialPicker(messageId, point);
+        } else {
+            emojiPicker.classList.remove("radial");
+            emojiPicker.removeAttribute("style");
+            emojiPicker.removeAttribute("aria-label");
+            emojiPicker.innerHTML = emojis.map((emoji) => `<button type="button" data-emoji="${emoji}" aria-label="${emoji}">${emoji}</button>`).join("");
+        }
         emojiPicker.hidden = false;
+    }
+
+    function renderRadialPicker(messageId, point) {
+        const row = stream.querySelector(`.message-row[data-message-id="${messageId}"]`);
+        if (!row) return;
+        const mine = row.classList.contains("message-mine");
+        const items = reactionEmojis.map((emoji) => ({ emoji }));
+        if (mine) items.push({ edit: true });
+
+        const radius = items.length > 8 ? 80 : 72;
+        const margin = radius + 32;
+        const rect = row.querySelector(".message-bubble").getBoundingClientRect();
+        const rawX = point && point.x > 0 ? point.x : rect.left + rect.width / 2;
+        const rawY = point && point.y > 0 ? point.y : rect.top + rect.height / 2;
+        const x = Math.min(Math.max(rawX, margin), window.innerWidth - margin);
+        const y = Math.min(Math.max(rawY, margin), window.innerHeight - margin);
+
+        const buttons = items.map((item, index) => {
+            const angle = -Math.PI / 2 + (index * 2 * Math.PI) / items.length; // start at top, go clockwise
+            const style = `--x:${Math.round(Math.cos(angle) * radius)}px;--y:${Math.round(Math.sin(angle) * radius)}px;--d:${index * 22}ms`;
+            if (item.edit) {
+                return `<button type="button" class="radial-item radial-edit" data-ring-edit style="${style}" aria-label="Edit message">✎</button>`;
+            }
+            const selected = row.querySelector(`.reaction-chip.is-selected[data-emoji="${CSS.escape(item.emoji)}"]`) ? " is-selected" : "";
+            return `<button type="button" class="radial-item${selected}" data-emoji="${item.emoji}" style="${style}" aria-label="React with ${item.emoji}">${item.emoji}</button>`;
+        }).join("");
+
+        emojiPicker.innerHTML = `<button type="button" class="radial-close" data-close aria-label="Close reactions">✕</button>${buttons}`;
+        emojiPicker.setAttribute("aria-label", "Choose a reaction");
+        emojiPicker.classList.add("radial");
+        emojiPicker.style.left = `${x}px`;
+        emojiPicker.style.top = `${y}px`;
+        emojiPicker.style.setProperty("--ring", `${radius * 2 + 56}px`);
     }
 
     function closeEmojiPicker() {
         emojiPicker.hidden = true;
+        emojiPicker.classList.remove("radial");
+        emojiPicker.removeAttribute("style");
         delete emojiPicker.dataset.mode;
         delete emojiPicker.dataset.messageId;
     }
@@ -266,6 +311,7 @@
     }
 
     async function openChat(chat) {
+        closeEmojiPicker();
         activeChat = chat;
         document.querySelector("#conversation-empty").hidden = true;
         document.querySelector("#conversation-active").hidden = false;
@@ -392,12 +438,25 @@
             if (chat) openChat(chat);
         }
     });
-    document.querySelector("#back-to-list").addEventListener("click", () => shell.classList.remove("chat-open"));
+    document.querySelector("#back-to-list").addEventListener("click", () => {
+        closeEmojiPicker();
+        shell.classList.remove("chat-open");
+    });
     document.querySelector("#emoji-toggle").addEventListener("click", () => {
-        if (emojiPicker.hidden) openEmojiPicker("composer");
+        if (emojiPicker.hidden || emojiPicker.dataset.mode !== "composer") openEmojiPicker("composer");
         else closeEmojiPicker();
     });
     emojiPicker.addEventListener("click", (event) => {
+        if (event.target.closest("[data-close]")) {
+            closeEmojiPicker();
+            return;
+        }
+        if (event.target.closest("[data-ring-edit]")) {
+            const id = emojiPicker.dataset.messageId;
+            closeEmojiPicker();
+            startEditing(id);
+            return;
+        }
         const button = event.target.closest("[data-emoji]");
         if (!button) return;
         const emoji = button.dataset.emoji;
@@ -414,16 +473,30 @@
     });
     stream.addEventListener("click", (event) => {
         const action = event.target.closest("[data-action]");
-        if (!action) return;
-        const { messageId } = action.dataset;
-        if (action.dataset.action === "edit") startEditing(messageId);
-        if (action.dataset.action === "react") openEmojiPicker("reaction", messageId);
-        if (action.dataset.action === "react-chip") sendReaction(messageId, action.dataset.emoji);
+        if (action) {
+            const { messageId } = action.dataset;
+            if (action.dataset.action === "edit") startEditing(messageId);
+            if (action.dataset.action === "react") {
+                const box = action.getBoundingClientRect();
+                openEmojiPicker("reaction", messageId, { x: box.left + box.width / 2, y: box.top + box.height / 2 });
+            }
+            if (action.dataset.action === "react-chip") sendReaction(messageId, action.dataset.emoji);
+            return;
+        }
+        const row = event.target.closest(".message-bubble")?.closest(".message-row");
+        if (!row || !row.dataset.messageId) return; // unsent messages can't be reacted to yet
+        openEmojiPicker("reaction", row.dataset.messageId, { x: event.clientX, y: event.clientY });
     });
     document.addEventListener("click", (event) => {
-        if (!emojiPicker.hidden && !event.target.closest("#emoji-picker, #emoji-toggle, [data-action='react']")) {
-            closeEmojiPicker();
-        }
+        if (emojiPicker.hidden) return;
+        if (event.target.closest("#emoji-picker, #emoji-toggle, [data-action='react'], .message-bubble")) return;
+        closeEmojiPicker();
+    });
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && !emojiPicker.hidden) closeEmojiPicker();
+    });
+    window.addEventListener("resize", () => {
+        if (emojiPicker.classList.contains("radial")) closeEmojiPicker();
     });
     editCancel.addEventListener("click", cancelEditing);
     composer.addEventListener("submit", (event) => {
@@ -464,11 +537,12 @@
         }
     });
     history.addEventListener("scroll", () => {
+        if (emojiPicker.classList.contains("radial")) closeEmojiPicker();
         if (history.scrollTop < 24 && hasMore && oldestMessageId && !loadingOlder && activeChat) {
             loadingOlder = true;
             loadMessages(activeChat.id, oldestMessageId).finally(() => { loadingOlder = false; });
         }
-    });
+    }, { passive: true });
     if (socket) {
         socket.on("connect", flushOutbox);
         socket.on("message:new", (message) => {
