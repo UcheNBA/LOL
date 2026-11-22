@@ -1226,7 +1226,7 @@ textarea:focus-visible {
     box-shadow: 0 1px 2px rgba(20, 45, 28, .10);
 }
 
-/* NEW: sent messages can be tapped to open the reaction ring */
+/* sent messages can be tapped to open the reaction wheel */
 .message-row[data-message-id]:not([data-message-id=""]) .message-bubble {
     cursor: pointer;
 }
@@ -1508,9 +1508,10 @@ textarea:focus-visible {
     background: var(--accent-pale);
 }
 
-/* ================= NEW: circular reaction picker ================= */
+/* ================= Emoji wheel ================= */
 
-#emoji-picker.radial {
+#emoji-picker.wheel {
+    --disc: 288px;
     position: fixed;
     right: auto;
     bottom: auto;
@@ -1524,34 +1525,58 @@ textarea:focus-visible {
     border-radius: 0;
     background: none;
     box-shadow: none;
+    outline: 0;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
 }
 
-#emoji-picker.radial[hidden] {
+#emoji-picker.wheel[hidden] {
     display: none;
 }
 
-/* soft round backdrop behind the ring */
-#emoji-picker.radial::before {
-    content: "";
+.wheel-disc {
     position: absolute;
     top: 0;
     left: 0;
-    width: var(--ring, 200px);
-    height: var(--ring, 200px);
-    margin: calc(var(--ring, 200px) / -2) 0 0 calc(var(--ring, 200px) / -2);
+    width: var(--disc);
+    height: var(--disc);
+    margin: calc(var(--disc) / -2) 0 0 calc(var(--disc) / -2);
+    border: 1px solid rgba(255, 255, 255, .14);
     border-radius: 50%;
-    background: rgba(20, 28, 24, .55);
-    backdrop-filter: blur(6px);
-    animation: ring-grow .22s ease-out;
+    background: rgba(20, 28, 24, .66);
+    backdrop-filter: blur(8px);
+    cursor: grab;
+    animation: wheel-grow .22s ease-out;
 }
 
-#emoji-picker.radial .radial-item,
-#emoji-picker.radial .radial-close {
+.wheel-disc::after {
+    content: "";
+    position: absolute;
+    inset: 34px;
+    border: 1px dashed rgba(255, 255, 255, .16);
+    border-radius: 50%;
+}
+
+.wheel-pointer {
+    position: absolute;
+    top: -152px;
+    left: 0;
+    margin-left: -8px;
+    border: 8px solid transparent;
+    border-top-color: var(--accent);
+    pointer-events: none;
+}
+
+#emoji-picker.wheel .wheel-item {
     position: absolute;
     top: 0;
     left: 0;
+    width: 44px;
+    height: 44px;
     min-width: 0;
     min-height: 0;
+    margin: -22px 0 0 -22px;
     padding: 0;
     display: grid;
     place-items: center;
@@ -1559,60 +1584,327 @@ textarea:focus-visible {
     border-radius: 50%;
     color: var(--ink);
     background: var(--surface);
-    box-shadow: 0 6px 18px rgba(0, 0, 0, .28);
-    cursor: pointer;
-    transition: transform .15s, background .15s;
-}
-
-#emoji-picker.radial .radial-item {
-    width: 46px;
-    height: 46px;
-    margin: -23px 0 0 -23px;
-    font-size: 24px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, .25);
+    font: 24px/1 "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
     translate: var(--x) var(--y);
-    animation: ring-pop .28s cubic-bezier(.3, 1.5, .5, 1) backwards;
-    animation-delay: var(--d, 0ms);
+    scale: var(--s, 1);
+    cursor: pointer;
 }
 
-#emoji-picker.radial .radial-item:hover,
-#emoji-picker.radial .radial-item:focus-visible {
+#emoji-picker.wheel .wheel-item[hidden] {
+    display: none;
+}
+
+#emoji-picker.wheel .wheel-item:hover,
+#emoji-picker.wheel .wheel-item:focus-visible {
     background: var(--accent-pale);
-    transform: scale(1.3);
 }
 
-#emoji-picker.radial .radial-item.is-selected {
+#emoji-picker.wheel .wheel-item.is-selected {
     border-color: var(--accent);
     outline: 3px solid var(--accent);
 }
 
-#emoji-picker.radial .radial-edit {
+.wheel-hub {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 96px;
+    height: 96px;
+    margin: -48px 0 0 -48px;
+    padding: 0 3px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border: 1px solid var(--line);
+    border-radius: 50%;
+    color: var(--ink);
+    background: var(--surface);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, .3);
+}
+
+#emoji-picker.wheel .wheel-hub button {
+    width: 22px;
+    height: 40px;
+    min-width: 0;
+    min-height: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 11px;
     color: var(--accent-deep);
-    font-size: 19px;
+    background: none;
+    font-size: 22px;
+    line-height: 1;
+    cursor: pointer;
 }
 
-#emoji-picker.radial .radial-close {
-    width: 32px;
-    height: 32px;
-    margin: -16px 0 0 -16px;
+#emoji-picker.wheel .wheel-hub button:hover {
+    background: var(--accent-pale);
+}
+
+.wheel-hub-info {
+    display: grid;
+    justify-items: center;
+    gap: 3px;
+    line-height: 1;
+}
+
+.wheel-hub-icon {
+    font: 28px/1 "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+}
+
+.wheel-hub-name {
     color: var(--muted);
+    font: 8px var(--mono);
+}
+
+#emoji-picker.wheel .wheel-close {
+    position: absolute;
+    top: -122px;
+    left: 88px;
+    width: 28px;
+    height: 28px;
+    min-width: 0;
+    min-height: 0;
+    padding: 0;
+    display: grid;
+    place-items: center;
+    border: 1px solid var(--line);
+    border-radius: 50%;
+    color: var(--muted);
+    background: var(--surface);
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.wheel-actions {
+    position: absolute;
+    top: 152px;
+    left: 0;
+    transform: translateX(-50%);
+    padding: 4px;
+    display: flex;
+    gap: 2px;
+    border: 1px solid var(--line);
+    border-radius: 99px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+    white-space: nowrap;
+}
+
+#emoji-picker.wheel .wheel-actions button {
+    min-width: 0;
+    min-height: 0;
+    height: 34px;
+    padding: 0 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    border: 0;
+    border-radius: 99px;
+    color: var(--ink);
+    background: none;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+#emoji-picker.wheel .wheel-actions button:hover,
+#emoji-picker.wheel .wheel-actions button:focus-visible {
+    background: var(--accent-pale);
+}
+
+#emoji-picker.wheel .wheel-actions .is-danger {
+    color: #d9483b;
+}
+
+@keyframes wheel-grow {
+    from {
+        transform: scale(.6);
+        opacity: 0;
+    }
+}
+
+/* ================= end emoji wheel ================= */
+
+/* ================= Reply ================= */
+
+.reply-quote {
+    margin: 0 0 6px;
+    padding: 6px 9px;
+    display: grid;
+    gap: 2px;
+    max-width: 100%;
+    border-left: 4px solid var(--accent);
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--ink) 7%, transparent);
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.reply-quote b {
+    color: var(--accent-deep);
+    font-size: 10px;
+}
+
+.reply-quote span {
+    display: -webkit-box;
+    overflow: hidden;
+    color: var(--muted);
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow-wrap: anywhere;
+}
+
+.reply-bar {
+    margin: 0 24px;
+    padding: 8px 10px 8px 12px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border: 1px solid var(--line);
+    border-bottom: 0;
+    border-left: 4px solid var(--accent);
+    border-radius: 4px 4px 0 0;
+    background: var(--surface);
+}
+
+.reply-bar[hidden] {
+    display: none;
+}
+
+.reply-bar-text {
+    flex: 1;
+    min-width: 0;
+    display: grid;
+    gap: 2px;
+    font-size: 11px;
+}
+
+.reply-bar-text b {
+    color: var(--accent-deep);
+}
+
+.reply-bar-text span {
+    overflow: hidden;
+    color: var(--muted);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.reply-cancel {
+    width: 28px;
+    height: 28px;
+    border: 0;
+    border-radius: 50%;
+    color: var(--muted);
+    background: transparent;
+    cursor: pointer;
+}
+
+.reply-cancel:hover {
+    background: var(--accent-pale);
+}
+
+.message-row.flash .message-bubble {
+    animation: bubble-flash 1.2s ease-out;
+}
+
+@keyframes bubble-flash {
+
+    0%,
+    55% {
+        box-shadow: 0 0 0 3px var(--accent);
+    }
+
+    100% {
+        box-shadow: 0 1px 2px rgba(20, 45, 28, .10);
+    }
+}
+
+/* ================= Delete ================= */
+
+.message-bubble.is-deleted {
+    border: 1px dashed var(--line);
+    background: transparent;
+    box-shadow: none;
+    cursor: default;
+}
+
+.message-bubble.is-deleted::before,
+.message-bubble.is-deleted::after {
+    display: none;
+}
+
+.deleted-text {
+    color: var(--muted);
+    font-style: italic;
+}
+
+.confirm-dialog {
+    width: min(380px, calc(100% - 28px));
+    padding: 0;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    color: var(--ink);
+    background: var(--surface);
+    box-shadow: var(--shadow);
+}
+
+.confirm-dialog::backdrop {
+    background: rgba(18, 30, 24, .5);
+    backdrop-filter: blur(3px);
+}
+
+.confirm-body {
+    padding: 24px;
+}
+
+.confirm-body h2 {
+    margin: 0 0 8px;
+    font: 700 19px var(--display);
+}
+
+.confirm-preview {
+    margin: 0 0 18px;
+    overflow: hidden;
+    color: var(--muted);
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.confirm-actions {
+    display: grid;
+    gap: 8px;
+}
+
+.confirm-actions button {
+    min-height: 44px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--ink);
+    background: var(--surface);
     font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
 }
 
-@keyframes ring-pop {
-    from {
-        transform: scale(.2);
-        opacity: 0;
-    }
+.confirm-actions button:hover {
+    background: var(--surface-soft);
 }
 
-@keyframes ring-grow {
-    from {
-        transform: scale(.5);
-        opacity: 0;
-    }
+.confirm-actions .is-danger {
+    border-color: transparent;
+    color: #fff;
+    background: #d9483b;
 }
 
-/* ================= end circular reaction picker ================= */
+.confirm-actions .is-danger:hover {
+    background: #bd3a2e;
+}
+
+/* ================= end reply and delete ================= */
 
 .search-dialog {
     position: fixed;
@@ -1883,8 +2175,8 @@ textarea:focus-visible {
         transform: translateX(-100%);
     }
 
-    /* CHANGED: no leftover transform once the chat is open, so the
-       fixed-position reaction ring is measured from the screen */
+    /* no leftover transform once the chat is open, so the
+       fixed-position emoji wheel is measured from the screen */
     .messenger.chat-open .conversation {
         z-index: 3;
         transform: none;
@@ -1932,6 +2224,10 @@ textarea:focus-visible {
         padding: 8px 8px max(8px, env(safe-area-inset-bottom));
     }
 
+    .reply-bar {
+        margin: 0 11px;
+    }
+
     .message-content {
         max-width: 88%;
     }
@@ -1944,6 +2240,11 @@ textarea:focus-visible {
     .emoji-picker {
         right: 12px;
         bottom: calc(84px + env(safe-area-inset-bottom));
+    }
+
+    #emoji-picker.wheel .wheel-actions button {
+        padding: 0 9px;
+        font-size: 11px;
     }
 
     .composer-footnote {
