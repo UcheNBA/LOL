@@ -3,8 +3,11 @@ from datetime import datetime
 from sqlalchemy import func, select
 
 from .extensions import db
-from .models import Chat, ChatMember, Message, MessageStatus, Reaction, User, utcnow
+from .models import (Chat, ChatMember, Message, MessageHidden, MessageStatus,
+                     Reaction, User, utcnow)
 from .presence import is_online
+
+DELETED_PREVIEW = "🚫 Message deleted"
 
 
 def format_time(value):
@@ -29,40 +32,75 @@ def avatar_initial(name):
     return (name or "?").strip()[:1].upper()
 
 
-def message_payload(message, viewer_id):
-    recipient_statuses = [
+def hidden_ids_for(user_id):
+    """Subquery of message ids this user chose to 'delete for me'."""
+    return select(MessageHidden.message_id).where(MessageHidden.user_id == user_id)
+
+
+def aggregate_status(message):
+    """sent / delivered / read, as seen by the sender."""
+    recipients = [
         status for status in message.statuses if status.user_id != message.sender_id]
-    read = bool(recipient_statuses) and all(
-        status.read_at for status in recipient_statuses)
-    delivered = bool(recipient_statuses) and all(
-        status.delivered_at for status in recipient_statuses)
-    reaction_counts = db.session.execute(
-        select(Reaction.emoji, db.func.count(Reaction.id))
-        .where(Reaction.message_id == message.id)
+    if recipients and all(status.read_at for status in recipients):
+        return "read"
+    if recipients and all(status.delivered_at for status in recipients):
+        return "delivered"
+    return "sent"
+
+
+def reaction_summary(message_id, viewer_id):
+    """Reaction chips for one message, from one viewer's point of view."""
+    counts = db.session.execute(
+        select(Reaction.emoji, func.count(Reaction.id))
+        .where(Reaction.message_id == message_id)
         .group_by(Reaction.emoji)
+        .order_by(func.min(Reaction.id))
     ).all()
-    viewer_reactions = set(db.session.scalars(
+    mine = set(db.session.scalars(
         select(Reaction.emoji).where(
-            Reaction.message_id == message.id,
+            Reaction.message_id == message_id,
             Reaction.user_id == viewer_id,
         )
     ).all())
+    return [{"emoji": emoji, "count": count, "reacted": emoji in mine}
+            for emoji, count in counts]
+
+
+def reply_payload(message):
+    """A small summary of the message being replied to."""
+    if not message.reply_to_id:
+        return None
+    parent = db.session.get(Message, message.reply_to_id)
+    if not parent:
+        return None
+    deleted = parent.deleted_at is not None
+    return {
+        "id": parent.id,
+        "sender_id": parent.sender_id,
+        "sender_name": parent.sender.display_name if parent.sender else "Former member",
+        "body": "" if deleted else (parent.body or "")[:200],
+        "deleted": deleted,
+    }
+
+
+def message_payload(message, viewer_id):
+    deleted = message.deleted_at is not None
     return {
         "id": message.id,
         "client_id": message.client_id,
         "chat_id": message.chat_id,
         "sender_id": message.sender_id,
         "sender_name": message.sender.display_name if message.sender else "Former member",
-        "body": message.body,
+        # a deleted message never sends its text to anyone
+        "body": "" if deleted else message.body,
+        "deleted": deleted,
+        "reply_to": None if deleted else reply_payload(message),
         "created_at": message.created_at.isoformat(),
         "time": format_time(message.created_at),
         "mine": message.sender_id == viewer_id,
-        "status": "read" if read else "delivered" if delivered else "sent",
-        "edited": message.edited_at is not None,
-        "reactions": [
-            {"emoji": emoji, "count": count, "reacted": emoji in viewer_reactions}
-            for emoji, count in reaction_counts
-        ],
+        "status": aggregate_status(message),
+        "edited": message.edited_at is not None and not deleted,
+        "reactions": [] if deleted else reaction_summary(message.id, viewer_id),
     }
 
 
@@ -70,18 +108,33 @@ def chat_payload(chat, user_id):
     own_member = member_for(chat.id, user_id)
     other = next(
         (member.user for member in chat.members if member.user_id != user_id), None)
-    latest = db.session.scalar(select(Message).where(Message.chat_id == chat.id).order_by(
-        Message.created_at.desc(), Message.id.desc()).limit(1))
+
+    hidden = hidden_ids_for(user_id)
+
+    latest = db.session.scalar(
+        select(Message)
+        .where(Message.chat_id == chat.id, Message.id.not_in(hidden))
+        .order_by(Message.created_at.desc(), Message.id.desc())
+        .limit(1))
+
     unread_query = select(func.count(Message.id)).where(
         Message.chat_id == chat.id,
         Message.sender_id != user_id,
+        Message.deleted_at.is_(None),
+        Message.id.not_in(hidden),
     )
     if own_member.last_read_at:
         unread_query = unread_query.where(
             Message.created_at > own_member.last_read_at)
     unread = db.session.scalar(unread_query) or 0
+
     title = chat_title(chat, user_id)
-    preview = latest.body if latest else "Start a conversation"
+    if not latest:
+        preview = "Start a conversation"
+    elif latest.deleted_at:
+        preview = DELETED_PREVIEW
+    else:
+        preview = latest.body
     other_online = bool(other and is_online(other.id))
     return {
         "id": chat.id,

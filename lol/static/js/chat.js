@@ -142,7 +142,7 @@
         const parent = message.reply_to;
         if (!parent) return "";
         const own = Number(parent.sender_id) === Number(userId);
-        const who = own ? "You" : (activeChat?.title || "Them");
+        const who = own ? "You" : (parent.sender_name || activeChat?.title || "Them");
         const text = parent.deleted ? "🚫 Message deleted" : parent.body;
         return `<blockquote class="reply-quote" data-jump="${parent.id}"><b>${escapeHTML(who)}</b><span>${escapeHTML(text)}</span></blockquote>`;
     }
@@ -315,8 +315,8 @@
         const message = messageCache.get(String(messageId));
         if (!message || message.deleted) return;
         if (editingMessageId) cancelEditing();
-        replyTo = { id: message.id, body: message.body, sender_id: message.sender_id };
-        replyBar.querySelector("b").textContent = isOwnMessage(message) ? "You" : (activeChat?.title || "Reply");
+        replyTo = { id: message.id, body: message.body, sender_id: message.sender_id, sender_name: message.sender_name };
+        replyBar.querySelector("b").textContent = isOwnMessage(message) ? "You" : (message.sender_name || activeChat?.title || "Reply");
         replyBar.querySelector("span").textContent = message.body;
         replyBar.hidden = false;
         input.focus();
@@ -927,7 +927,7 @@
         input.value = "";
         input.style.height = "auto";
         const pending = { ...message, sender_id: Number(userId), created_at: new Date().toISOString(), time: formatClock(new Date()), status: "sent" };
-        if (replyTo) pending.reply_to = { id: replyTo.id, body: replyTo.body, sender_id: replyTo.sender_id, deleted: false };
+        if (replyTo) pending.reply_to = { id: replyTo.id, body: replyTo.body, sender_id: replyTo.sender_id, sender_name: replyTo.sender_name, deleted: false };
         cancelReply();
         addMessage(pending, { scroll: true });
         const queue = readOutbox();

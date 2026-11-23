@@ -123,6 +123,23 @@ class MessageStatus(db.Model):
     )
 
 
+class MessageHidden(db.Model):
+    """A message one user chose to 'delete for me'.
+
+    It still exists for everyone else; it just never loads for the
+    user who hid it.
+    """
+    __tablename__ = "message_hidden"
+    message_id = db.Column(db.Integer, db.ForeignKey(
+        "message.id", ondelete="CASCADE"), primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey(
+        "user.id", ondelete="CASCADE"), primary_key=True)
+    created_at = db.Column(db.DateTime(timezone=True),
+                           nullable=False, default=utcnow)
+    __table_args__ = (
+        db.Index("ix_message_hidden_user", "user_id"),)
+
+
 class PasswordResetToken(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey(

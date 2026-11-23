@@ -75,7 +75,7 @@ def create_app(test_config=None):
     register_socket_handlers(socketio)
 
     with app.app_context():
-        db.create_all()
+        db.create_all()          # also creates the new message_hidden table
         migrate_additive_columns()
 
     return app
@@ -92,7 +92,11 @@ def migrate_additive_columns():
     timestamp_type = "TIMESTAMP WITH TIME ZONE" if dialect == "postgresql" else "DATETIME"
     additions = {
         User.__tablename__: {"last_seen_at": timestamp_type},
-        Message.__tablename__: {"edited_at": timestamp_type},
+        Message.__tablename__: {
+            "edited_at": timestamp_type,
+            "deleted_at": timestamp_type,
+            "reply_to_id": "INTEGER",
+        },
     }
     with db.engine.begin() as connection:
         for table_name, columns in additions.items():

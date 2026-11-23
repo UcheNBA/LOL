@@ -4,7 +4,7 @@ from flask import Blueprint, current_app, jsonify, request
 from flask_login import current_user, login_required
 from sqlalchemy import and_, func, or_, select
 
-from .chat_service import chat_payload, member_for, message_payload
+from .chat_service import chat_payload, hidden_ids_for, member_for, message_payload
 from .extensions import db, limiter
 from .models import Chat, ChatMember, Contact, Message, MessageStatus, User, utcnow
 
@@ -84,7 +84,6 @@ def list_chats():
         select(Chat).join(ChatMember).where(ChatMember.user_id ==
                                             current_user.id).order_by(Chat.updated_at.desc())
     ).all()
-    from .chat_service import chat_payload
     return jsonify({"chats": [chat_payload(chat, current_user.id) for chat in chats]})
 
 
@@ -97,7 +96,12 @@ def list_messages(chat_id):
         before_id = int(request.args.get("before", "0"))
     except ValueError:
         return jsonify({"error": "Invalid message cursor."}), 400
-    query = select(Message).where(Message.chat_id == chat_id)
+
+    # Messages this user chose to "delete for me" never come back.
+    query = select(Message).where(
+        Message.chat_id == chat_id,
+        Message.id.not_in(hidden_ids_for(current_user.id)),
+    )
     if before_id:
         cursor = db.session.get(Message, before_id)
         if not cursor or cursor.chat_id != chat_id:
@@ -112,7 +116,6 @@ def list_messages(chat_id):
 @chats_bp.get("/chats/<int:chat_id>")
 @login_required
 def get_chat(chat_id):
-    from .chat_service import chat_payload
     chat = db.session.get(Chat, chat_id)
     if not chat or not member_for(chat_id, current_user.id):
         return jsonify({"error": "Chat not found."}), 404
