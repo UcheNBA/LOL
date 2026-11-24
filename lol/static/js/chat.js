@@ -31,13 +31,22 @@
     const initialChats = JSON.parse(document.querySelector("#initial-chats").textContent);
     let chats = initialChats;
     let activeChat = null;
+    let openToken = 0;
     let loadingOlder = false;
     let hasMore = false;
     let oldestMessageId = null;
     let editingMessageId = null;
+    let draftBeforeEdit = "";
     let replyTo = null;
+    let newBelow = 0;
+    let lastPeople = [];
+    let toastTimer;
+    let hoverTimer;
     const renderedIds = new Set();
-    const messageCache = new Map();
+    const messageCache = new Map();   // message id -> message data
+    const chatCache = new Map();      // chat id -> { messages, hasMore }, for instant paint
+    const prefetching = new Set();
+    const typingNow = new Map();      // chat id -> { name, timer }
     const list = document.querySelector("#chat-list");
     const history = document.querySelector("#message-history");
     const stream = document.querySelector("#message-stream");
@@ -47,8 +56,10 @@
     const emojiPicker = document.querySelector("#emoji-picker");
     const sendButton = document.querySelector("#send-button");
     const editCancel = document.querySelector("#edit-cancel");
+    const conversationPane = document.querySelector(".conversation");
     const outboxKey = `lol-outbox-${userId}`;
     const recentKey = `lol-recent-react-${userId}`;
+    const draftKey = `lol-drafts-${userId}`;
     const socket = typeof window.io === "function" ? window.io({ reconnection: true, reconnectionDelayMax: 5000 }) : null;
     const emojis = ["😀", "😂", "🥹", "😍", "😊", "😮", "😢", "🙏", "👏", "👍", "❤️", "🔥", "🎉", "✨", "💯", "☕"];
     const quickDefaults = ["❤️", "😂", "👍", "😮", "😢", "🙏"];
@@ -64,31 +75,161 @@
         return data;
     };
 
+    const escapeHTML = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
+    const escapeAttribute = escapeHTML;
     const avatarHTML = (chat) => chat.avatar_url
         ? `<img src="${escapeAttribute(chat.avatar_url)}" alt="">`
         : escapeHTML(chat.initial || chat.title?.slice(0, 1) || "?");
-    const escapeHTML = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
-    const escapeAttribute = escapeHTML;
     const formatClock = (date) => new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date(date));
     const isOwnMessage = (message) => Number(message.sender_id) === Number(userId);
-    const isNearLatest = () => history.scrollHeight - history.scrollTop - history.clientHeight < 80;
+    const distanceFromBottom = () => history.scrollHeight - history.scrollTop - history.clientHeight;
+    const isNearLatest = () => distanceFromBottom() < 80;
     const clamp = (value, low, high) => (high < low ? (low + high) / 2 : Math.min(Math.max(value, low), high));
     const mod = (n, m) => ((n % m) + m) % m;
     const formatLastSeen = (value) => value
         ? `last seen ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value))}`
         : "last seen recently";
 
+    let isEmojiOnly = () => false;
+    try {
+        const pattern = /^(?:\p{Extended_Pictographic}(?:\uFE0F|\u200D|\p{Emoji_Modifier})*\s*){1,3}$/u;
+        isEmojiOnly = (text) => pattern.test(String(text).trim());
+    } catch { /* older browsers just show normal bubbles */ }
+
     function presenceText(chat) {
+        if (chat.type === "group") return "";
         return chat.online ? "online" : chat.last_seen_at ? formatLastSeen(chat.last_seen_at) : "offline";
+    }
+
+    /* ---------- Toast (with optional action such as Undo) ---------- */
+
+    function showToast(message, { action = null, duration = 3000 } = {}) {
+        let toast = document.querySelector(".toast-message");
+        if (!toast) {
+            toast = document.createElement("div");
+            toast.className = "toast-message";
+            toast.setAttribute("role", "status");
+            document.body.append(toast);
+        }
+        toast.textContent = message;
+        if (action) {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "toast-action";
+            button.textContent = action.label;
+            button.addEventListener("click", () => {
+                action.onClick();
+                toast.classList.remove("toast-visible");
+            });
+            toast.append(button);
+        }
+        toast.classList.add("toast-visible");
+        window.clearTimeout(toastTimer);
+        toastTimer = window.setTimeout(() => toast.classList.remove("toast-visible"), duration);
+    }
+
+    /* ---------- Drafts: each chat keeps its own unsent text ---------- */
+
+    const drafts = (() => {
+        try { return JSON.parse(localStorage.getItem(draftKey) || "{}"); } catch { return {}; }
+    })();
+
+    function setDraft(chatId, text) {
+        if (!chatId) return;
+        if (String(text).trim()) drafts[chatId] = text;
+        else delete drafts[chatId];
+        try { localStorage.setItem(draftKey, JSON.stringify(drafts)); } catch { /* storage unavailable */ }
+    }
+
+    function autosize() {
+        input.style.height = "auto";
+        if (input.value) input.style.height = `${Math.min(input.scrollHeight, 120)}px`;
+    }
+
+    function restoreDraft() {
+        input.value = (activeChat?.id && drafts[activeChat.id]) || "";
+        autosize();
+    }
+
+    /* ---------- Typing indicator ---------- */
+
+    let typingSentAt = 0;
+    let typingStopTimer = 0;
+
+    function emitTyping(on) {
+        if (!socket?.connected || !activeChat?.id) return;
+        socket.emit("typing", { chat_id: activeChat.id, typing: on });
+    }
+
+    function noteTyping() {
+        const now = Date.now();
+        if (now - typingSentAt > 2500) {
+            typingSentAt = now;
+            emitTyping(true);
+        }
+        window.clearTimeout(typingStopTimer);
+        typingStopTimer = window.setTimeout(() => {
+            typingSentAt = 0;
+            emitTyping(false);
+        }, 3000);
+    }
+
+    function stopTyping() {
+        window.clearTimeout(typingStopTimer);
+        if (typingSentAt) {
+            typingSentAt = 0;
+            emitTyping(false);
+        }
+    }
+
+    function typingLabel(chat) {
+        const entry = typingNow.get(Number(chat.id));
+        if (!entry) return "";
+        return chat.type === "group" ? `${entry.name} is typing…` : "typing…";
+    }
+
+    function setTyping(chatId, name, on) {
+        const key = Number(chatId);
+        const previous = typingNow.get(key);
+        if (previous) window.clearTimeout(previous.timer);
+        if (on) {
+            typingNow.set(key, { name, timer: window.setTimeout(() => { typingNow.delete(key); refreshTyping(key); }, 4500) });
+        } else {
+            typingNow.delete(key);
+        }
+        refreshTyping(key);
+    }
+
+    function refreshTyping(chatId) {
+        renderChatList();
+        if (Number(activeChat?.id) === Number(chatId)) updateHeaderStatus();
+    }
+
+    function updateHeaderStatus() {
+        if (!activeChat) return;
+        const label = document.querySelector("#active-presence");
+        const typing = typingLabel(activeChat);
+        label.textContent = typing || presenceText(activeChat);
+        label.classList.toggle("is-online", Boolean(typing || activeChat.online));
     }
 
     /* ---------- Chat list ---------- */
 
+    function previewFor(chat) {
+        const typing = typingLabel(chat);
+        if (typing) return { text: typing, label: "", cls: " is-typing" };
+        const draft = Number(activeChat?.id) !== Number(chat.id) && drafts[chat.id];
+        if (draft) return { text: draft, label: "Draft:", cls: " is-draft" };
+        return { text: chat.preview || "Start a conversation", label: "", cls: "" };
+    }
+
     function renderChatRow(chat) {
         const active = Number(activeChat?.id) === Number(chat.id) ? " is-active" : "";
         const badge = chat.unread ? `<span class="unread-badge">${chat.unread > 99 ? "99+" : chat.unread}</span>` : "";
+        const preview = previewFor(chat);
+        const dot = chat.online && chat.type !== "group" ? '<i class="online-dot" aria-hidden="true"></i>' : "";
         return `<button class="chat-row${active}" type="button" role="listitem" data-chat-id="${chat.id}" data-search="${escapeAttribute(`${chat.title} ${chat.username || ""}`.toLowerCase())}">
-      <span class="avatar avatar-sky">${avatarHTML(chat)}</span><span class="chat-row-copy"><span class="chat-row-top"><strong>${escapeHTML(chat.title)}</strong><time>${escapeHTML(chat.time || "")}</time></span><span class="chat-row-bottom"><span class="chat-preview">${escapeHTML(chat.preview || "Start a conversation")}</span>${badge}</span></span></button>`;
+      <span class="avatar-wrap"><span class="avatar avatar-sky">${avatarHTML(chat)}</span>${dot}</span><span class="chat-row-copy"><span class="chat-row-top"><strong>${escapeHTML(chat.title)}</strong><time>${escapeHTML(chat.time || "")}</time></span><span class="chat-row-bottom"><span class="chat-preview${preview.cls}">${preview.label ? `<em>${preview.label}</em>` : ""}${escapeHTML(preview.text)}</span>${badge}</span></span></button>`;
     }
 
     function renderChatList() {
@@ -123,6 +264,31 @@
         renderChatList();
     }
 
+    /* ---------- Per-chat message cache (instant reopen) ---------- */
+
+    function cacheIncoming(message) {
+        const entry = chatCache.get(Number(message.chat_id));
+        if (!entry || entry.messages.some((item) => item.client_id === message.client_id)) return;
+        entry.messages.push(message);
+        if (entry.messages.length > 60) entry.messages.shift();
+    }
+
+    function patchCached(chatId, messageId, patch) {
+        const entry = chatCache.get(Number(chatId));
+        const found = entry?.messages.find((item) => String(item.id) === String(messageId));
+        if (found) Object.assign(found, patch);
+    }
+
+    function prefetch(chatId) {
+        const key = Number(chatId);
+        if (chatCache.has(key) || prefetching.has(key)) return;
+        prefetching.add(key);
+        request(`/api/chats/${key}/messages`)
+            .then((data) => { if (!chatCache.has(key)) chatCache.set(key, { messages: data.messages, hasMore: data.has_more }); })
+            .catch(() => { /* opening the chat will retry and show any error */ })
+            .finally(() => prefetching.delete(key));
+    }
+
     /* ---------- Message rendering ---------- */
 
     function statusHTML(message) {
@@ -154,18 +320,49 @@
     function bubbleHTML(message) {
         const mine = isOwnMessage(message);
         const reactions = message.deleted ? "" : (message.reactions || []).map((reaction) => reactionChip(message.id, reaction)).join("");
+        const big = !message.deleted && !message.reply_to && isEmojiOnly(message.body || "");
         const body = message.deleted
             ? `<p class="deleted-text">🚫 ${mine ? "You deleted this message" : "This message was deleted"}</p>`
             : `${replyQuoteHTML(message)}<p>${escapeHTML(message.body)}</p>`;
         const edited = !message.deleted && message.edited ? '<span class="message-edited">edited</span>' : "";
-        return `<div class="message-content"><div class="message-bubble${message.deleted ? " is-deleted" : ""}">${body}<footer>${edited}<time>${escapeHTML(message.time || formatClock(message.created_at))}</time>${statusHTML(message)}</footer></div>${actionsHTML(message)}<div class="reaction-list" data-reactions-for="${message.id || ""}">${reactions}</div></div>`;
+        return `<div class="message-content"><div class="message-bubble${message.deleted ? " is-deleted" : ""}${big ? " emoji-only" : ""}">${body}<footer>${edited}<time>${escapeHTML(message.time || formatClock(message.created_at))}</time>${statusHTML(message)}</footer></div>${actionsHTML(message)}<div class="reaction-list" data-reactions-for="${message.id || ""}">${reactions}</div></div>`;
     }
 
     function cacheMessage(message) {
         if (message.id) messageCache.set(String(message.id), { ...messageCache.get(String(message.id)), ...message });
     }
 
-    function addMessage(message, { scroll = false, prepend = false } = {}) {
+    /* day dividers */
+
+    const dayKey = (timestamp) => new Date(Number(timestamp)).toDateString();
+
+    function dayLabel(timestamp) {
+        const date = new Date(Number(timestamp));
+        const today = new Date();
+        const yesterday = new Date(today.getTime() - 86400000);
+        if (date.toDateString() === today.toDateString()) return "Today";
+        if (date.toDateString() === yesterday.toDateString()) return "Yesterday";
+        return new Intl.DateTimeFormat(undefined, { weekday: "long", month: "short", day: "numeric" }).format(date);
+    }
+
+    function relabelDays() {
+        stream.querySelectorAll(".day-sep").forEach((node) => node.remove());
+        let previous = "";
+        stream.querySelectorAll(".message-row").forEach((row) => {
+            const day = row.dataset.day;
+            if (day && day !== previous) {
+                const separator = document.createElement("div");
+                separator.className = "day-sep";
+                const label = document.createElement("span");
+                label.textContent = dayLabel(row.dataset.ts);
+                separator.append(label);
+                row.before(separator);
+                previous = day;
+            }
+        });
+    }
+
+    function addMessage(message, { scroll = false, prepend = false, batch = false, live = false } = {}) {
         cacheMessage(message);
         if (renderedIds.has(String(message.client_id))) {
             const existing = [...stream.querySelectorAll(".message-row")]
@@ -177,19 +374,24 @@
             }
             return;
         }
+        stream.querySelectorAll(".empty-chat, .skeleton-row").forEach((node) => node.remove());
         renderedIds.add(String(message.client_id));
         const mine = isOwnMessage(message);
         const wasNearLatest = isNearLatest();
-        const shouldMarkRead = !mine && document.visibilityState === "visible" && wasNearLatest;
         const row = document.createElement("article");
-        row.className = `message-row ${mine ? "message-mine" : "message-theirs"}`;
+        row.className = `message-row ${mine ? "message-mine" : "message-theirs"}${live ? " is-new" : ""}`;
         row.dataset.messageId = message.id || "";
         row.dataset.clientId = message.client_id;
+        row.dataset.ts = String(Date.parse(message.created_at) || Date.now());
+        row.dataset.day = dayKey(row.dataset.ts);
         row.innerHTML = bubbleHTML(message);
         if (prepend) stream.prepend(row);
         else stream.append(row);
-        if (message.id && !mine && socket && activeChat) {
-            socket.emit("message:received", { message_id: message.id, read: shouldMarkRead });
+        if (live) row.addEventListener("animationend", () => row.classList.remove("is-new"), { once: true });
+        if (!batch) relabelDays();
+        // Only live messages need a "received" note; opening the chat already marks history as read.
+        if (message.id && !mine && socket && activeChat && !batch && message.status !== "read") {
+            socket.emit("message:received", { message_id: message.id, read: document.visibilityState === "visible" && wasNearLatest });
         }
         if (mine && message.id && message.status) updateStatus(message.id, message.status);
         if (scroll && (mine || wasNearLatest)) history.scrollTop = history.scrollHeight;
@@ -202,6 +404,7 @@
 
     function updateMessage(message) {
         cacheMessage(message);
+        patchCached(message.chat_id, message.id, { body: message.body, edited: true });
         const row = stream.querySelector(`[data-message-id="${message.id}"]`);
         if (!row) return;
         const body = row.querySelector(".message-bubble p:not(.deleted-text)");
@@ -230,23 +433,125 @@
     }
 
     function setPresence(data) {
-        const chat = chats.find((item) => Number(item.other_user_id) === Number(data.user_id));
+        const chat = chats.find((item) => Number(item.other_user_id) === Number(data.user_id) && item.type !== "group");
         if (!chat) return;
         chat.online = data.online;
         chat.last_seen_at = data.last_seen_at;
-        if (Number(activeChat?.id) === Number(chat.id)) {
-            const label = document.querySelector("#active-presence");
-            label.textContent = presenceText(chat);
-            label.classList.toggle("is-online", Boolean(chat.online));
-        }
+        renderChatList();
+        if (Number(activeChat?.id) === Number(chat.id)) updateHeaderStatus();
     }
 
-    /* ---------- Delete ---------- */
+    /* ---------- Loading states ---------- */
+
+    function showSkeleton() {
+        stream.replaceChildren();
+        [180, 120, 230, 150, 100].forEach((width, index) => {
+            const row = document.createElement("div");
+            row.className = `skeleton-row${index % 2 ? " mine" : ""}`;
+            const bar = document.createElement("span");
+            bar.style.width = `${width}px`;
+            row.append(bar);
+            stream.append(row);
+        });
+    }
+
+    function showEmptyChat(chat) {
+        stream.replaceChildren();
+        const box = document.createElement("div");
+        box.className = "empty-chat";
+        box.innerHTML = '<div class="empty-wave">👋</div><strong></strong><p>No messages yet. Break the ice!</p><div class="icebreakers"></div>';
+        box.querySelector("strong").textContent = `Say hi to ${chat.title}`;
+        ["Hey 👋", "How’s your day going?", "😂", "What’s up?"].forEach((text) => {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.dataset.icebreaker = text;
+            button.textContent = text;
+            box.querySelector(".icebreakers").append(button);
+        });
+        stream.append(box);
+    }
+
+    function paintMessages(messages, more) {
+        hasMore = more;
+        stream.replaceChildren();
+        renderedIds.clear();
+        messageCache.clear();
+        if (!messages.length) {
+            oldestMessageId = null;
+            showEmptyChat(activeChat);
+            updateJump();
+            return;
+        }
+        messages.forEach((message) => addMessage(message, { batch: true }));
+        relabelDays();
+        oldestMessageId = messages[0].id;
+        history.scrollTop = history.scrollHeight;
+        updateJump();
+    }
+
+    /* ---------- Jump to latest ---------- */
+
+    const jumpButton = document.createElement("button");
+    jumpButton.type = "button";
+    jumpButton.className = "jump-latest";
+    jumpButton.hidden = true;
+    jumpButton.setAttribute("aria-label", "Jump to latest message");
+    jumpButton.innerHTML = '<span class="jump-count" hidden></span>↓';
+    conversationPane.append(jumpButton);
+    jumpButton.addEventListener("click", () => {
+        history.scrollTo({ top: history.scrollHeight, behavior: reduceMotion ? "auto" : "smooth" });
+        newBelow = 0;
+        updateJump();
+    });
+
+    function updateJump() {
+        const away = Boolean(activeChat) && stream.querySelector(".message-row") && distanceFromBottom() > 240;
+        jumpButton.hidden = !away;
+        if (!away) newBelow = 0;
+        const badge = jumpButton.querySelector(".jump-count");
+        badge.hidden = !newBelow;
+        badge.textContent = newBelow > 99 ? "99+" : String(newBelow);
+    }
+
+    /* ---------- Little delights ---------- */
+
+    function floatEmoji(messageId, emoji) {
+        if (reduceMotion) return;
+        const content = stream.querySelector(`.message-row[data-message-id="${messageId}"] .message-content`);
+        if (!content) return;
+        const node = document.createElement("span");
+        node.className = "float-emoji";
+        node.textContent = emoji;
+        node.addEventListener("animationend", () => node.remove());
+        content.append(node);
+    }
+
+    function burst() {
+        if (reduceMotion) return;
+        const layer = document.createElement("div");
+        layer.className = "confetti";
+        layer.setAttribute("aria-hidden", "true");
+        const pieces = ["🎉", "✨", "🎊", "⭐"];
+        for (let i = 0; i < 18; i += 1) {
+            const piece = document.createElement("span");
+            piece.textContent = pieces[i % pieces.length];
+            piece.style.setProperty("--dx", `${Math.round((Math.random() - 0.5) * 90)}vw`);
+            piece.style.setProperty("--dy", `-${40 + Math.round(Math.random() * 40)}vh`);
+            piece.style.setProperty("--r", `${Math.round((Math.random() - 0.5) * 720)}deg`);
+            piece.style.animationDelay = `${Math.round(Math.random() * 180)}ms`;
+            layer.append(piece);
+        }
+        document.body.append(layer);
+        window.setTimeout(() => layer.remove(), 1800);
+    }
+
+    /* ---------- Delete (for me has a 5 second Undo) ---------- */
 
     function markDeleted(data) {
         const id = String(data.message_id);
         const message = { ...(messageCache.get(id) || { id: data.message_id }), deleted: true, body: "", reactions: [] };
         messageCache.set(id, message);
+        patchCached(data.chat_id, id, { deleted: true, body: "", reactions: [] });
         const row = stream.querySelector(`.message-row[data-message-id="${id}"]`);
         if (row) row.innerHTML = bubbleHTML(message);
         stream.querySelectorAll(`.reply-quote[data-jump="${id}"] span`).forEach((node) => { node.textContent = "🚫 Message deleted"; });
@@ -260,24 +565,46 @@
     }
 
     function removeMessageRow(id) {
+        const entry = chatCache.get(Number(activeChat?.id));
+        if (entry) entry.messages = entry.messages.filter((item) => String(item.id) !== String(id));
         const row = stream.querySelector(`.message-row[data-message-id="${id}"]`);
         if (!row) return;
         renderedIds.delete(row.dataset.clientId);
         row.remove();
+        relabelDays();
     }
 
-    function deleteMessage(id, scope) {
+    function deleteMessage(id, scope, onFail) {
         if (!socket?.connected) {
             showToast("Reconnect to delete messages.");
+            onFail?.();
             return;
         }
         socket.emit("message:delete", { message_id: Number(id), scope }, (result) => {
             if (!result?.ok) {
                 showToast(result?.error || "Message could not be deleted.");
+                onFail?.();
                 return;
             }
             if (scope === "me") removeMessageRow(id);
             else markDeleted({ message_id: id, chat_id: activeChat?.id });
+        });
+    }
+
+    function deleteForMe(id) {
+        const row = stream.querySelector(`.message-row[data-message-id="${id}"]`);
+        if (!row) {
+            deleteMessage(id, "me");
+            return;
+        }
+        row.hidden = true;
+        let undone = false;
+        const timer = window.setTimeout(() => {
+            if (!undone) deleteMessage(id, "me", () => { row.hidden = false; });
+        }, 5000);
+        showToast("Message deleted for you.", {
+            duration: 5000,
+            action: { label: "Undo", onClick: () => { undone = true; window.clearTimeout(timer); row.hidden = false; } },
         });
     }
 
@@ -294,7 +621,8 @@
                 dlg.close();
             } else if (button?.dataset.scope) {
                 dlg.close();
-                deleteMessage(messageId, button.dataset.scope);
+                if (button.dataset.scope === "me") deleteForMe(messageId);
+                else deleteMessage(messageId, "everyone");
             }
         });
         dlg.addEventListener("close", () => dlg.remove());
@@ -340,16 +668,17 @@
         window.setTimeout(() => row.classList.remove("flash"), 1300);
     }
 
-    /* ---------- Edit ---------- */
+    /* ---------- Edit (your unsent draft is kept safe while editing) ---------- */
 
     function startEditing(messageId) {
         const row = stream.querySelector(`.message-row[data-message-id="${messageId}"]`);
         const body = row?.querySelector(".message-bubble p:not(.deleted-text)");
         if (!body) return;
         cancelReply();
+        if (!editingMessageId) draftBeforeEdit = input.value;
         editingMessageId = Number(messageId);
         input.value = body.textContent;
-        input.dispatchEvent(new Event("input", { bubbles: true }));
+        autosize();
         sendButton.setAttribute("aria-label", "Save edited message");
         sendButton.title = "Save edit";
         editCancel.hidden = false;
@@ -359,8 +688,9 @@
 
     function cancelEditing() {
         editingMessageId = null;
-        input.value = "";
-        input.style.height = "auto";
+        input.value = draftBeforeEdit;
+        draftBeforeEdit = "";
+        autosize();
         sendButton.setAttribute("aria-label", "Send message");
         sendButton.title = "Send message";
         editCancel.hidden = true;
@@ -606,6 +936,7 @@
                 return;
             }
             renderReactionList(messageId, result.reactions);
+            if (result.reactions.some((item) => item.emoji === emoji && item.reacted)) floatEmoji(messageId, emoji);
         });
     }
 
@@ -711,62 +1042,108 @@
         closeEmojiPicker();
     });
 
-    /* ---------- Loading, opening chats, outbox ---------- */
+    /* ---------- Opening chats (instant, with cache) ---------- */
 
-    async function loadMessages(chatId, before = null) {
-        const url = new URL(`/api/chats/${chatId}/messages`, location.origin);
-        if (before) url.searchParams.set("before", before);
-        const data = await request(url);
-        hasMore = data.has_more;
-        if (data.messages.length) {
-            if (before) {
-                const oldHeight = history.scrollHeight;
-                [...data.messages].reverse().forEach((message) => addMessage(message, { prepend: true }));
-                history.scrollTop += history.scrollHeight - oldHeight;
-            } else {
-                data.messages.forEach((message) => addMessage(message));
-                history.scrollTop = history.scrollHeight;
-            }
-            oldestMessageId = data.messages[0].id;
-        }
-    }
-
-    async function openChat(chat) {
+    function leaveChat() {
+        stopTyping();
         closeEmojiPicker();
         cancelReply();
-        if (editingMessageId) cancelEditing();
-        activeChat = chat;
-        messageCache.clear();
+        if (editingMessageId) cancelEditing();          // puts your earlier draft back first
+        if (activeChat?.id) setDraft(activeChat.id, input.value);
+        input.value = "";
+        autosize();
+    }
+
+    function paintHeader(chat) {
         document.querySelector("#conversation-empty").hidden = true;
         document.querySelector("#conversation-active").hidden = false;
         document.querySelector("#active-title").textContent = chat.title;
-        document.querySelector("#active-subtitle").textContent = chat.username ? `@${chat.username}` : "A direct conversation";
-        const presence = document.querySelector("#active-presence");
-        presence.textContent = presenceText(chat);
-        presence.classList.toggle("is-online", Boolean(chat.online));
+        document.querySelector("#active-subtitle").textContent = chat.type === "group"
+            ? "Group chat"
+            : (chat.username ? `@${chat.username}` : "A direct conversation");
         const avatar = document.querySelector("#active-avatar");
         avatar.innerHTML = avatarHTML(chat);
         avatar.className = "avatar avatar-current";
+        updateHeaderStatus();
         shell.classList.add("chat-open");
-        stream.replaceChildren();
-        renderedIds.clear();
-        oldestMessageId = null;
-        const empty = list.querySelector(`[data-chat-id="${chat.id}"]`);
-        list.querySelectorAll(".chat-row").forEach((row) => row.classList.toggle("is-active", row === empty));
-        chat.unread = 0;
-        renderChatList();
-        history.scrollTop = 0;
+    }
+
+    function beginOpen(chat) {
+        const token = ++openToken;
+        leaveChat();
+        activeChat = chat;
+        messageCache.clear();
+        newBelow = 0;
+        paintHeader(chat);
+        restoreDraft();
+        return token;
+    }
+
+    async function loadFirstPage(chat, token, hadCache) {
         try {
-            await loadMessages(chat.id);
-            if (socket) {
-                socket.emit("chat:join", { chat_id: chat.id }, (result) => {
-                    if (!result?.ok) console.warn(result?.error || "Unable to join chat");
-                });
-            }
+            const data = await request(`/api/chats/${chat.id}/messages`);
+            if (token !== openToken) return;
+            chatCache.set(Number(chat.id), { messages: data.messages, hasMore: data.has_more });
+            paintMessages(data.messages, data.has_more);
         } catch (error) {
+            if (token !== openToken) return;
+            if (!hadCache) stream.replaceChildren();
             showToast(error.message);
         }
     }
+
+    function openChat(chat) {
+        const token = beginOpen(chat);
+        chat.unread = 0;
+        renderChatList();
+        if (window.matchMedia("(min-width: 821px)").matches) input.focus({ preventScroll: true });
+        if (socket) socket.emit("chat:join", { chat_id: chat.id });
+        const cached = chatCache.get(Number(chat.id));
+        if (cached) paintMessages(cached.messages.slice(), cached.hasMore);
+        else showSkeleton();
+        return loadFirstPage(chat, token, Boolean(cached));
+    }
+
+    async function startChatWith(person) {
+        const existing = chats.find((item) => item.type !== "group" && Number(item.other_user_id) === Number(person.id));
+        if (existing) {
+            openChat(existing);                           // already have it: no network wait at all
+            return;
+        }
+        // Show the conversation immediately while the chat is created in the background.
+        const provisional = {
+            id: null, type: "direct", title: person.display_name, username: person.username,
+            avatar_url: person.avatar_url, initial: person.initial, other_user_id: person.id, online: false,
+        };
+        const token = beginOpen(provisional);
+        showSkeleton();
+        try {
+            const data = await request("/api/chats", { method: "POST", body: JSON.stringify({ user_id: Number(person.id) }) });
+            let chat = chats.find((item) => Number(item.id) === Number(data.chat.id));
+            if (!chat) {
+                chat = data.chat;
+                chats.unshift(chat);
+            }
+            renderChatList();
+            if (token !== openToken) return;
+            activeChat = chat;
+            updateHeaderStatus();
+            if (input.value.trim()) setDraft(chat.id, input.value);
+            if (socket) socket.emit("chat:join", { chat_id: chat.id });
+            if (data.created) {
+                showEmptyChat(chat);
+                updateJump();
+            } else {
+                await loadFirstPage(chat, token, false);
+            }
+        } catch (error) {
+            if (token !== openToken) return;
+            stream.replaceChildren();
+            showToast(error.message);
+        }
+    }
+
+    /* ---------- Outbox and sending ---------- */
 
     function readOutbox() {
         try { return JSON.parse(localStorage.getItem(outboxKey) || "[]"); } catch { return []; }
@@ -785,7 +1162,8 @@
                 showToast(result?.error || "Message could not be sent.");
                 return;
             }
-            addMessage(result.message, { scroll: true });
+            cacheIncoming(result.message);
+            if (Number(activeChat?.id) === Number(result.message.chat_id)) addMessage(result.message, { scroll: true });
             const remaining = readOutbox().filter((item) => item.client_id !== message.client_id);
             saveOutbox(remaining);
         });
@@ -795,18 +1173,29 @@
         readOutbox().forEach(sendQueuedMessage);
     }
 
-    function showToast(message) {
-        let toast = document.querySelector(".toast-message");
-        if (!toast) {
-            toast = document.createElement("div");
-            toast.className = "toast-message";
-            toast.setAttribute("role", "status");
-            document.body.append(toast);
+    function sendNewMessage(body) {
+        if (!activeChat?.id) {
+            showToast("Opening the chat… try again in a moment.");
+            return false;
         }
-        toast.textContent = message;
-        toast.classList.add("toast-visible");
-        window.setTimeout(() => toast.classList.remove("toast-visible"), 3000);
+        stopTyping();
+        const message = { chat_id: activeChat.id, body, client_id: crypto.randomUUID() };
+        if (replyTo) message.reply_to_id = replyTo.id;
+        const pending = { ...message, sender_id: Number(userId), created_at: new Date().toISOString(), time: formatClock(new Date()), status: "sent" };
+        if (replyTo) pending.reply_to = { id: replyTo.id, body: replyTo.body, sender_id: replyTo.sender_id, sender_name: replyTo.sender_name, deleted: false };
+        cancelReply();
+        addMessage(pending, { scroll: true, live: true });
+        updateJump();
+        const queue = readOutbox();
+        queue.push(message);
+        saveOutbox(queue);
+        updateChatSummary(activeChat.id, pending);
+        sendQueuedMessage(message);
+        if (body.includes("🎉")) burst();
+        return true;
     }
+
+    /* ---------- People search ---------- */
 
     async function searchPeople(query) {
         const results = document.querySelector("#people-results");
@@ -817,6 +1206,7 @@
         results.innerHTML = '<p class="search-hint">Looking around…</p>';
         try {
             const data = await request(`/api/users?q=${encodeURIComponent(query.trim())}`);
+            lastPeople = data.users;
             if (!data.users.length) {
                 results.innerHTML = '<p class="search-hint">No one found. Try a username or phone number.</p>';
                 return;
@@ -839,23 +1229,13 @@
         window.clearTimeout(searchTimer);
         searchTimer = window.setTimeout(() => searchPeople(event.target.value), 180);
     });
-    document.querySelector("#people-results").addEventListener("click", async (event) => {
+    document.querySelector("#people-results").addEventListener("click", (event) => {
         const button = event.target.closest("[data-user-id]");
         if (!button) return;
-        try {
-            const data = await request("/api/chats", { method: "POST", body: JSON.stringify({ user_id: Number(button.dataset.userId) }) });
-            const result = await request(`/api/chats/${data.chat_id}`);
-            let chat = chats.find((item) => Number(item.id) === Number(data.chat_id));
-            if (!chat) {
-                chat = result.chat;
-                chats.unshift(chat);
-                renderChatList();
-            }
-            dialog.close();
-            await openChat(chat);
-        } catch (error) {
-            showToast(error.message);
-        }
+        const person = lastPeople.find((item) => Number(item.id) === Number(button.dataset.userId));
+        if (!person) return;
+        dialog.close();
+        startChatWith(person);
     });
     list.addEventListener("click", (event) => {
         const row = event.target.closest("[data-chat-id]");
@@ -864,16 +1244,72 @@
             if (chat) openChat(chat);
         }
     });
+    list.addEventListener("pointerover", (event) => {
+        if (event.pointerType !== "mouse") return;
+        const row = event.target.closest("[data-chat-id]");
+        if (!row) return;
+        window.clearTimeout(hoverTimer);
+        hoverTimer = window.setTimeout(() => prefetch(row.dataset.chatId), 120);
+    });
+    list.addEventListener("pointerleave", () => window.clearTimeout(hoverTimer));
+
     document.querySelector("#back-to-list").addEventListener("click", () => {
-        closeEmojiPicker();
+        openToken += 1;
+        leaveChat();
+        activeChat = null;
         shell.classList.remove("chat-open");
+        renderChatList();
+        updateJump();
     });
     document.querySelector("#emoji-toggle").addEventListener("click", () => {
         if (emojiPicker.hidden || emojiPicker.dataset.mode !== "composer") openEmojiPicker("composer");
         else closeEmojiPicker();
     });
 
+    /* swipe a message to the right to reply (touch screens) */
+    let swipe = null;
+    let swipeJustHappened = false;
+    stream.addEventListener("pointerdown", (event) => {
+        if (event.pointerType !== "touch") return;
+        const row = event.target.closest(".message-row");
+        if (!row || !row.dataset.messageId || row.querySelector(".is-deleted")) return;
+        swipe = { row, id: event.pointerId, x: event.clientX, y: event.clientY, dx: 0, active: false };
+    });
+    stream.addEventListener("pointermove", (event) => {
+        if (!swipe || event.pointerId !== swipe.id) return;
+        const dx = event.clientX - swipe.x;
+        const dy = event.clientY - swipe.y;
+        if (!swipe.active) {
+            if (Math.abs(dy) > 12 && Math.abs(dy) > Math.abs(dx)) { swipe = null; return; }
+            if (dx > 12 && dx > Math.abs(dy) * 1.5) swipe.active = true;
+            else return;
+        }
+        swipe.dx = clamp(dx, 0, 90);
+        swipe.row.style.setProperty("--swipe", `${swipe.dx}px`);
+        swipe.row.classList.toggle("swipe-ready", swipe.dx >= 60);
+    });
+    const endSwipe = (event) => {
+        if (!swipe || event.pointerId !== swipe.id) return;
+        const { row, dx, active } = swipe;
+        swipe = null;
+        row.style.removeProperty("--swipe");
+        row.classList.remove("swipe-ready");
+        if (active) {
+            swipeJustHappened = true;
+            window.setTimeout(() => { swipeJustHappened = false; }, 350);
+            if (dx >= 60) startReply(row.dataset.messageId);
+        }
+    };
+    stream.addEventListener("pointerup", endSwipe);
+    stream.addEventListener("pointercancel", endSwipe);
+
     stream.addEventListener("click", (event) => {
+        if (swipeJustHappened) return;
+        const icebreaker = event.target.closest("[data-icebreaker]");
+        if (icebreaker) {
+            sendNewMessage(icebreaker.dataset.icebreaker);
+            return;
+        }
         const quote = event.target.closest("[data-jump]");
         if (quote) {
             jumpTo(quote.dataset.jump);
@@ -921,24 +1357,18 @@
             });
             return;
         }
-        if (!activeChat) return;
-        const message = { chat_id: activeChat.id, body, client_id: crypto.randomUUID() };
-        if (replyTo) message.reply_to_id = replyTo.id;
-        input.value = "";
-        input.style.height = "auto";
-        const pending = { ...message, sender_id: Number(userId), created_at: new Date().toISOString(), time: formatClock(new Date()), status: "sent" };
-        if (replyTo) pending.reply_to = { id: replyTo.id, body: replyTo.body, sender_id: replyTo.sender_id, sender_name: replyTo.sender_name, deleted: false };
-        cancelReply();
-        addMessage(pending, { scroll: true });
-        const queue = readOutbox();
-        queue.push(message);
-        saveOutbox(queue);
-        updateChatSummary(activeChat.id, pending);
-        sendQueuedMessage(message);
+        if (sendNewMessage(body)) {
+            input.value = "";
+            autosize();
+            setDraft(activeChat.id, "");
+        }
     });
     input.addEventListener("input", () => {
-        input.style.height = "auto";
-        input.style.height = `${Math.min(input.scrollHeight, 120)}px`;
+        autosize();
+        if (editingMessageId || !activeChat?.id) return;
+        setDraft(activeChat.id, input.value);
+        if (input.value.trim()) noteTyping();
+        else stopTyping();
     });
     input.addEventListener("keydown", (event) => {
         if (event.key === "Enter" && !event.shiftKey) {
@@ -946,21 +1376,49 @@
             composer.requestSubmit();
         }
     });
+
     history.addEventListener("scroll", () => {
         if (emojiPicker.classList.contains("wheel")) closeEmojiPicker();
-        if (history.scrollTop < 24 && hasMore && oldestMessageId && !loadingOlder && activeChat) {
+        updateJump();
+        if (history.scrollTop < 24 && hasMore && oldestMessageId && !loadingOlder && activeChat?.id) {
             loadingOlder = true;
-            loadMessages(activeChat.id, oldestMessageId).finally(() => { loadingOlder = false; });
+            const token = openToken;
+            request(`/api/chats/${activeChat.id}/messages?before=${oldestMessageId}`)
+                .then((data) => {
+                    if (token !== openToken) return;
+                    hasMore = data.has_more;
+                    if (!data.messages.length) return;
+                    const oldHeight = history.scrollHeight;
+                    [...data.messages].reverse().forEach((message) => addMessage(message, { prepend: true, batch: true }));
+                    relabelDays();
+                    history.scrollTop += history.scrollHeight - oldHeight;
+                    oldestMessageId = data.messages[0].id;
+                })
+                .catch((error) => showToast(error.message))
+                .finally(() => { loadingOlder = false; });
         }
     }, { passive: true });
 
     if (socket) {
         socket.on("connect", flushOutbox);
         socket.on("message:new", (message) => {
+            cacheIncoming(message);
             updateChatSummary(message.chat_id, message);
-            if (Number(activeChat?.id) === Number(message.chat_id)) addMessage(message, { scroll: true });
-            else if (!isOwnMessage(message)) socket.emit("message:received", { message_id: message.id, read: false });
+            if (Number(activeChat?.id) === Number(message.chat_id)) {
+                const away = distanceFromBottom() > 240;
+                addMessage(message, { scroll: true, live: true });
+                if (!isOwnMessage(message)) {
+                    setTyping(message.chat_id, "", false);
+                    if (away) newBelow += 1;
+                    if ((message.body || "").includes("🎉")) burst();
+                }
+                updateJump();
+            } else if (!isOwnMessage(message)) {
+                setTyping(message.chat_id, "", false);
+                socket.emit("message:received", { message_id: message.id, read: false });
+            }
         });
+        socket.on("typing", (data) => setTyping(data.chat_id, data.name || "Someone", Boolean(data.typing)));
         socket.on("message:status", (data) => updateStatus(data.message_id, data.status));
         socket.on("message:updated", updateMessage);
         socket.on("message:deleted", markDeleted);
@@ -969,13 +1427,16 @@
         socket.on("chat:activity", async () => {
             try {
                 const data = await request("/api/chats");
+                const open = activeChat;
                 chats = data.chats;
+                if (open?.id) activeChat = chats.find((item) => Number(item.id) === Number(open.id)) || open;
                 renderChatList();
+                updateHeaderStatus();
             } catch { /* Reconnection will refresh the list on the next activity. */ }
         });
     }
     document.addEventListener("visibilitychange", () => {
-        if (document.visibilityState === "visible" && activeChat && socket?.connected) {
+        if (document.visibilityState === "visible" && activeChat?.id && socket?.connected) {
             socket.emit("chat:join", { chat_id: activeChat.id });
         }
     });

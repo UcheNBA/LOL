@@ -1,6 +1,7 @@
-from datetime import datetime
+from collections import defaultdict
 
 from sqlalchemy import func, select
+from sqlalchemy.orm import selectinload
 
 from .extensions import db
 from .models import (Chat, ChatMember, Message, MessageHidden, MessageStatus,
@@ -38,7 +39,6 @@ def hidden_ids_for(user_id):
 
 
 def aggregate_status(message):
-    """sent / delivered / read, as seen by the sender."""
     recipients = [
         status for status in message.statuses if status.user_id != message.sender_id]
     if recipients and all(status.read_at for status in recipients):
@@ -48,60 +48,82 @@ def aggregate_status(message):
     return "sent"
 
 
-def reaction_summary(message_id, viewer_id):
-    """Reaction chips for one message, from one viewer's point of view."""
-    counts = db.session.execute(
-        select(Reaction.emoji, func.count(Reaction.id))
-        .where(Reaction.message_id == message_id)
-        .group_by(Reaction.emoji)
+def messages_payload(messages, viewer_id):
+    """Serialize many messages with a handful of queries instead of ~5 each."""
+    if not messages:
+        return []
+    ids = [message.id for message in messages]
+
+    # reactions for every message in one query
+    chips = defaultdict(list)
+    for message_id, emoji, count in db.session.execute(
+        select(Reaction.message_id, Reaction.emoji, func.count(Reaction.id))
+        .where(Reaction.message_id.in_(ids))
+        .group_by(Reaction.message_id, Reaction.emoji)
         .order_by(func.min(Reaction.id))
-    ).all()
-    mine = set(db.session.scalars(
-        select(Reaction.emoji).where(
-            Reaction.message_id == message_id,
-            Reaction.user_id == viewer_id,
-        )
-    ).all())
-    return [{"emoji": emoji, "count": count, "reacted": emoji in mine}
-            for emoji, count in counts]
+    ).all():
+        chips[message_id].append((emoji, count))
 
+    # which of them this viewer reacted to, in one query
+    mine = defaultdict(set)
+    for message_id, emoji in db.session.execute(
+        select(Reaction.message_id, Reaction.emoji).where(
+            Reaction.message_id.in_(ids), Reaction.user_id == viewer_id)
+    ).all():
+        mine[message_id].add(emoji)
 
-def reply_payload(message):
-    """A small summary of the message being replied to."""
-    if not message.reply_to_id:
-        return None
-    parent = db.session.get(Message, message.reply_to_id)
-    if not parent:
-        return None
-    deleted = parent.deleted_at is not None
-    return {
-        "id": parent.id,
-        "sender_id": parent.sender_id,
-        "sender_name": parent.sender.display_name if parent.sender else "Former member",
-        "body": "" if deleted else (parent.body or "")[:200],
-        "deleted": deleted,
-    }
+    # reply parents in one query
+    reply_ids = {m.reply_to_id for m in messages if m.reply_to_id}
+    parents = {}
+    if reply_ids:
+        parents = {
+            parent.id: parent for parent in db.session.scalars(
+                select(Message).where(Message.id.in_(reply_ids))
+                .options(selectinload(Message.sender))
+            ).all()
+        }
+
+    def reply_summary(message):
+        parent = parents.get(message.reply_to_id) if message.reply_to_id else None
+        if not parent:
+            return None
+        deleted = parent.deleted_at is not None
+        return {
+            "id": parent.id,
+            "sender_id": parent.sender_id,
+            "sender_name": parent.sender.display_name if parent.sender else "Former member",
+            "body": "" if deleted else (parent.body or "")[:200],
+            "deleted": deleted,
+        }
+
+    payloads = []
+    for message in messages:
+        deleted = message.deleted_at is not None
+        payloads.append({
+            "id": message.id,
+            "client_id": message.client_id,
+            "chat_id": message.chat_id,
+            "sender_id": message.sender_id,
+            "sender_name": message.sender.display_name if message.sender else "Former member",
+            "body": "" if deleted else message.body,
+            "deleted": deleted,
+            "reply_to": None if deleted else reply_summary(message),
+            "created_at": message.created_at.isoformat(),
+            "time": format_time(message.created_at),
+            "mine": message.sender_id == viewer_id,
+            "status": aggregate_status(message),
+            "edited": message.edited_at is not None and not deleted,
+            "reactions": [] if deleted else [
+                {"emoji": emoji, "count": count,
+                    "reacted": emoji in mine[message.id]}
+                for emoji, count in chips[message.id]
+            ],
+        })
+    return payloads
 
 
 def message_payload(message, viewer_id):
-    deleted = message.deleted_at is not None
-    return {
-        "id": message.id,
-        "client_id": message.client_id,
-        "chat_id": message.chat_id,
-        "sender_id": message.sender_id,
-        "sender_name": message.sender.display_name if message.sender else "Former member",
-        # a deleted message never sends its text to anyone
-        "body": "" if deleted else message.body,
-        "deleted": deleted,
-        "reply_to": None if deleted else reply_payload(message),
-        "created_at": message.created_at.isoformat(),
-        "time": format_time(message.created_at),
-        "mine": message.sender_id == viewer_id,
-        "status": aggregate_status(message),
-        "edited": message.edited_at is not None and not deleted,
-        "reactions": [] if deleted else reaction_summary(message.id, viewer_id),
-    }
+    return messages_payload([message], viewer_id)[0]
 
 
 def chat_payload(chat, user_id):
@@ -138,6 +160,7 @@ def chat_payload(chat, user_id):
     other_online = bool(other and is_online(other.id))
     return {
         "id": chat.id,
+        "type": chat.type,
         "title": title,
         "username": other.username if other else "",
         "other_user_id": other.id if other else None,

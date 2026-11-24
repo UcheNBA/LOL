@@ -2314,3 +2314,234 @@ textarea:focus-visible {
         transition-duration: .01ms !important;
     }
 }
+
+/* ================= Comfort and fun additions ================= */
+
+/* easier to read: the original text was very small */
+body { font-size: 16px; }
+.sidebar-head h1 { font-size: 24px; }
+.chat-row-top strong { font-size: 15px; }
+.chat-row-top time { font-size: 11px; }
+.chat-preview { font-size: 13px; }
+.unread-badge { min-width: 20px; height: 20px; font-size: 11px; }
+.chat-search input,
+.people-search input { font-size: 14px; }
+.conversation-person strong { font-size: 15px; }
+.conversation-person small,
+.conversation-person .presence-label { font-size: 12px; }
+.message-bubble p { font-size: 15px; line-height: 1.5; }
+.message-bubble footer { font-size: 10px; }
+.message-edited { font-size: 10px; }
+.reaction-chip { font-size: 14px; }
+.reply-quote { font-size: 13px; }
+.reply-bar-text { font-size: 13px; }
+.composer-input textarea { font-size: 15px; }
+.person-result strong { font-size: 14px; }
+.person-result small { font-size: 12px; }
+.search-hint { font-size: 13px; }
+
+/* keep 16px on phones so iOS doesn't zoom into the text box */
+@media (max-width: 820px) {
+    .composer-input textarea,
+    .chat-search input,
+    .people-search input { font-size: 16px; }
+}
+
+/* the "hidden" attribute must win over display:flex */
+.message-row[hidden] { display: none; }
+
+/* new messages pop in softly */
+.message-row.is-new .message-bubble { animation: bubble-pop .25s cubic-bezier(.3, 1.4, .5, 1); }
+.message-mine.is-new .message-bubble { transform-origin: 100% 100%; }
+.message-theirs.is-new .message-bubble { transform-origin: 0 100%; }
+@keyframes bubble-pop { from { opacity: 0; transform: scale(.85) translateY(8px); } }
+
+/* emoji-only messages are shown big, with no bubble */
+.message-bubble.emoji-only { padding: 2px 6px; background: transparent; box-shadow: none; }
+.message-bubble.emoji-only::before,
+.message-bubble.emoji-only::after { display: none; }
+.message-bubble.emoji-only p { font-size: 42px; line-height: 1.15; }
+
+/* day dividers */
+.day-sep { margin: 10px 0 4px; display: flex; justify-content: center; }
+.day-sep span {
+    padding: 5px 12px;
+    border-radius: 99px;
+    color: var(--muted);
+    background: color-mix(in srgb, var(--surface) 90%, transparent);
+    box-shadow: 0 1px 2px rgba(20, 45, 28, .08);
+    font-size: 12px;
+    font-weight: 600;
+}
+
+/* loading skeleton */
+.skeleton-row { display: flex; justify-content: flex-start; }
+.skeleton-row.mine { justify-content: flex-end; }
+.skeleton-row span {
+    display: block;
+    height: 38px;
+    max-width: 80%;
+    border-radius: 12px;
+    background: linear-gradient(90deg, var(--bubble-other) 25%, color-mix(in srgb, var(--line) 70%, var(--bubble-other)) 50%, var(--bubble-other) 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.2s linear infinite;
+}
+.skeleton-row.mine span {
+    background: linear-gradient(90deg, var(--bubble-mine) 25%, color-mix(in srgb, var(--accent) 18%, var(--bubble-mine)) 50%, var(--bubble-mine) 75%);
+    background-size: 200% 100%;
+}
+@keyframes shimmer { to { background-position: -200% 0; } }
+
+/* friendly empty chat */
+.empty-chat {
+    max-width: 310px;
+    margin: auto;
+    padding: 26px 20px;
+    border-radius: 16px;
+    text-align: center;
+    background: color-mix(in srgb, var(--surface) 90%, transparent);
+    box-shadow: var(--shadow);
+}
+.empty-wave { display: inline-block; font-size: 46px; transform-origin: 70% 70%; animation: wave 1.8s ease-in-out infinite; }
+@keyframes wave {
+    0%, 60%, 100% { transform: rotate(0); }
+    10%, 30% { transform: rotate(16deg); }
+    20%, 40% { transform: rotate(-10deg); }
+    50% { transform: rotate(8deg); }
+}
+.empty-chat strong { display: block; margin: 8px 0 4px; font: 700 18px var(--display); }
+.empty-chat p { margin: 0 0 14px; color: var(--muted); font-size: 14px; }
+.icebreakers { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+.icebreakers button {
+    padding: 9px 14px;
+    border: 1px solid var(--line);
+    border-radius: 99px;
+    color: var(--ink);
+    background: var(--surface);
+    font-size: 14px;
+    cursor: pointer;
+    transition: transform .15s, background .15s;
+}
+.icebreakers button:hover { background: var(--accent-pale); transform: translateY(-2px); }
+
+/* chat list: draft, typing, online dot */
+.chat-preview.is-typing { color: var(--accent-deep); font-style: italic; }
+.chat-preview.is-draft em { margin-right: 4px; color: var(--accent-deep); font-style: normal; font-weight: 600; }
+.avatar-wrap { position: relative; flex: 0 0 auto; }
+.online-dot {
+    position: absolute;
+    right: 0;
+    bottom: 1px;
+    width: 13px;
+    height: 13px;
+    border: 2px solid var(--surface);
+    border-radius: 50%;
+    background: var(--accent);
+}
+.chat-row:hover .online-dot { border-color: var(--surface-soft); }
+.chat-row.is-active .online-dot { border-color: color-mix(in srgb, var(--accent-pale) 62%, var(--surface)); }
+
+/* jump to latest */
+.jump-latest {
+    position: absolute;
+    z-index: 5;
+    right: 26px;
+    bottom: 104px;
+    width: 44px;
+    height: 44px;
+    display: grid;
+    place-items: center;
+    border: 1px solid var(--line);
+    border-radius: 50%;
+    color: var(--ink);
+    background: var(--surface);
+    box-shadow: var(--shadow);
+    font-size: 20px;
+    cursor: pointer;
+    animation: rise-in .2s both;
+}
+.jump-latest[hidden],
+.jump-count[hidden] { display: none; }
+.jump-count {
+    position: absolute;
+    top: -6px;
+    right: -4px;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 5px;
+    display: grid;
+    place-items: center;
+    border-radius: 10px;
+    color: #fff;
+    background: var(--accent);
+    font: 600 11px var(--mono);
+}
+@media (max-width: 820px) {
+    .jump-latest { right: 14px; bottom: calc(96px + env(safe-area-inset-bottom)); }
+}
+
+/* swipe right to reply */
+.message-row { position: relative; touch-action: pan-y; }
+.message-content { translate: var(--swipe, 0px) 0; }
+.message-row:not([style*="--swipe"]) .message-content { transition: translate .18s ease; }
+.message-row::before {
+    content: "↩";
+    position: absolute;
+    top: 50%;
+    left: 6px;
+    width: 30px;
+    height: 30px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    color: var(--accent-deep);
+    background: var(--accent-pale);
+    opacity: 0;
+    translate: 0 -50%;
+    scale: .6;
+    transition: opacity .12s, scale .12s;
+    pointer-events: none;
+}
+.message-row[style*="--swipe"]::before { opacity: .6; scale: .85; }
+.message-row.swipe-ready::before { opacity: 1; scale: 1.1; }
+
+/* floating reaction and confetti */
+.float-emoji {
+    position: absolute;
+    top: -6px;
+    right: 12px;
+    z-index: 3;
+    font-size: 28px;
+    pointer-events: none;
+    animation: float-up 1s ease-out forwards;
+}
+@keyframes float-up {
+    from { opacity: 1; transform: translateY(0) scale(.7); }
+    to { opacity: 0; transform: translateY(-70px) scale(1.4); }
+}
+.confetti { position: fixed; inset: 0; z-index: 90; overflow: hidden; pointer-events: none; }
+.confetti span {
+    position: absolute;
+    bottom: 20%;
+    left: 50%;
+    font-size: 26px;
+    animation: confetti-burst 1.4s cubic-bezier(.2, .7, .3, 1) forwards;
+}
+@keyframes confetti-burst {
+    from { opacity: 1; transform: translate(0, 0) rotate(0); }
+    to { opacity: 0; transform: translate(var(--dx), var(--dy)) rotate(var(--r)); }
+}
+
+/* toast with an Undo button */
+.toast-message { display: flex; align-items: center; gap: 14px; font-size: 14px; }
+.toast-visible { pointer-events: auto; }
+.toast-action {
+    padding: 4px 8px;
+    border: 0;
+    border-radius: 4px;
+    color: #7ff0cf;
+    background: none;
+    font: 700 13px var(--sans);
+    cursor: pointer;
+}
+.toast-action:hover { background: rgba(255, 255, 255, .12); }

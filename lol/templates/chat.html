@@ -1,5 +1,8 @@
 {% extends 'base.html' %}
 {% block title %}Messages | LOL{% endblock %}
+{% block head %}
+<link rel="preconnect" href="https://cdn.socket.io" crossorigin>
+{% endblock %}
 {% block content %}
 <section class="messenger" id="chats" data-user-id="{{ current_user.id }}">
     <aside class="chat-sidebar" aria-label="Your conversations">
@@ -15,15 +18,15 @@
         <div class="chat-list" id="chat-list" role="list" aria-label="Conversations">
             {% for chat in chats %}
             <button class="chat-row" type="button" role="listitem" data-chat-id="{{ chat.id }}"
-                data-search="{{ (chat.title ~ ' ' ~ chat.username) | lower }}">
-                <span
-                    class="avatar{% if loop.index % 4 == 0 %} avatar-coral{% elif loop.index % 4 == 1 %} avatar-sky{% elif loop.index % 4 == 2 %} avatar-leaf{% else %} avatar-lilac{% endif %}">{%
-                    if chat.avatar_url %}<img src="{{ chat.avatar_url }}" alt="">{% else %}{{ chat.initial }}{% endif
+                data-search="{{ (chat.title ~ ' ' ~ (chat.username or '')) | lower }}">
+                <span class="avatar-wrap"><span class="avatar avatar-sky">{% if chat.avatar_url %}<img
+                            src="{{ chat.avatar_url }}" alt="">{% else %}{{ chat.initial }}{% endif %}</span>{% if
+                    chat.online and chat.type != 'group' %}<i class="online-dot" aria-hidden="true"></i>{% endif
                     %}</span>
                 <span class="chat-row-copy"><span class="chat-row-top"><strong>{{ chat.title }}</strong><time>{{
                             chat.time }}</time></span><span class="chat-row-bottom"><span class="chat-preview">{{
-                            chat.preview }}</span>{% if chat.unread %}<span class="unread-badge">{{ chat.unread
-                            }}</span>{% endif %}</span></span>
+                            chat.preview }}</span>{% if chat.unread %}<span class="unread-badge">{{ '99+' if
+                            chat.unread > 99 else chat.unread }}</span>{% endif %}</span></span>
             </button>
             {% endfor %}
             <div class="empty-list" id="empty-list" {% if chats %}hidden{% endif %}><span
@@ -45,7 +48,8 @@
             <h2>Make a little connection.</h2>
             <p>Pick up a conversation or find someone new.</p><button class="button button-primary new-chat-button"
                 type="button">Find someone <span aria-hidden="true">↗</span></button>
-            <div class="end-to-end-note"><span aria-hidden="true">⌁</span> YOUR MESSAGES, JUST BETWEEN YOU</div>
+            <div class="end-to-end-note"><span aria-hidden="true">⌁</span> ENTER TO SEND · SHIFT+ENTER FOR A NEW LINE
+            </div>
         </div>
         <div class="conversation-active" id="conversation-active" hidden>
             <header class="conversation-head"><button class="icon-button back-button" id="back-to-list" type="button"
@@ -58,14 +62,13 @@
             <div class="message-history" id="message-history" role="log" aria-label="Messages" aria-live="polite"
                 tabindex="0">
                 <div class="history-top" id="history-top"></div>
-                <div class="message-date">TODAY</div>
                 <div class="message-stream" id="message-stream"></div>
             </div>
             <form class="composer" id="message-form"><button class="composer-tool" id="emoji-toggle" type="button"
                     aria-label="Insert emoji" title="Insert emoji">☺</button><label class="composer-input"><span
                         class="sr-only">Write a message</span><textarea id="message-input" rows="1" maxlength="4000"
-                        placeholder="Write a message…" autocomplete="off"></textarea></label><button class="edit-cancel"
-                    id="edit-cancel" type="button" hidden aria-label="Cancel edit">Cancel</button><button
+                        placeholder="Write a message…" autocomplete="off" enterkeyhint="send"></textarea></label><button
+                    class="edit-cancel" id="edit-cancel" type="button" hidden aria-label="Cancel edit">Cancel</button><button
                     class="send-button" id="send-button" type="submit" aria-label="Send message"
                     title="Send message"><span aria-hidden="true">↗</span></button></form>
             <p class="composer-footnote">A good thought is always worth sending.</p>
@@ -82,7 +85,7 @@
         <p class="search-hint">Type at least 2 characters to find people.</p>
     </div>
 </dialog>
-<script src="https://cdn.socket.io/4.8.1/socket.io.min.js" crossorigin="anonymous"></script>
+<script defer src="https://cdn.socket.io/4.8.1/socket.io.min.js" crossorigin="anonymous"></script>
 <script id="initial-chats" type="application/json">{{ chats | tojson }}</script>
-<script defer src="{{ url_for('static', filename='js/chat.js') }}"></script>
+<script defer src="{{ url_for('static', filename='js/chat.js', v=2) }}"></script>
 {% endblock %}
