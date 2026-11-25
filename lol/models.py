@@ -53,6 +53,9 @@ class Chat(db.Model):
     avatar_url = db.Column(db.String(2048))
     creator_id = db.Column(db.Integer, db.ForeignKey(
         "user.id", ondelete="SET NULL"))
+    # 0 = messages stay forever; otherwise new messages vanish after this many seconds
+    disappear_seconds = db.Column(
+        db.Integer, nullable=False, default=0, server_default="0")
     created_at = db.Column(db.DateTime(timezone=True),
                            nullable=False, default=utcnow)
     updated_at = db.Column(db.DateTime(timezone=True),
@@ -89,12 +92,19 @@ class Message(db.Model):
         "chat.id", ondelete="CASCADE"), nullable=False)
     sender_id = db.Column(db.Integer, db.ForeignKey(
         "user.id", ondelete="SET NULL"))
+    # text | image | voice | file | system
+    kind = db.Column(db.String(16), nullable=False,
+                     default="text", server_default="text")
     body = db.Column(db.String(4000), nullable=False)
-    media_url = db.Column(db.String(2048))
+    media_url = db.Column(db.String(2048))      # stored file name on disk
+    media_name = db.Column(db.String(255))      # name shown to people
+    media_size = db.Column(db.Integer)
+    media_duration = db.Column(db.Integer)      # seconds, voice notes
     reply_to_id = db.Column(db.Integer, db.ForeignKey(
         "message.id", ondelete="SET NULL"))
     created_at = db.Column(db.DateTime(timezone=True),
                            nullable=False, default=utcnow)
+    expires_at = db.Column(db.DateTime(timezone=True))
     deleted_at = db.Column(db.DateTime(timezone=True))
     edited_at = db.Column(db.DateTime(timezone=True))
     chat = db.relationship("Chat", back_populates="messages")
@@ -124,11 +134,7 @@ class MessageStatus(db.Model):
 
 
 class MessageHidden(db.Model):
-    """A message one user chose to 'delete for me'.
-
-    It still exists for everyone else; it just never loads for the
-    user who hid it.
-    """
+    """A message one user chose to 'delete for me'."""
     __tablename__ = "message_hidden"
     message_id = db.Column(db.Integer, db.ForeignKey(
         "message.id", ondelete="CASCADE"), primary_key=True)
@@ -136,8 +142,18 @@ class MessageHidden(db.Model):
         "user.id", ondelete="CASCADE"), primary_key=True)
     created_at = db.Column(db.DateTime(timezone=True),
                            nullable=False, default=utcnow)
-    __table_args__ = (
-        db.Index("ix_message_hidden_user", "user_id"),)
+    __table_args__ = (db.Index("ix_message_hidden_user", "user_id"),)
+
+
+class MessageStar(db.Model):
+    """A message one user starred. Stars are private to that user."""
+    __tablename__ = "message_star"
+    user_id = db.Column(db.Integer, db.ForeignKey(
+        "user.id", ondelete="CASCADE"), primary_key=True)
+    message_id = db.Column(db.Integer, db.ForeignKey(
+        "message.id", ondelete="CASCADE"), primary_key=True)
+    created_at = db.Column(db.DateTime(timezone=True),
+                           nullable=False, default=utcnow)
 
 
 class PasswordResetToken(db.Model):

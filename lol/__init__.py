@@ -3,7 +3,7 @@ import os
 import secrets
 
 from dotenv import load_dotenv
-from flask import Flask
+from flask import Flask, jsonify
 from flask_socketio import SocketIO
 
 load_dotenv()
@@ -45,11 +45,16 @@ def create_app(test_config=None):
         PASSWORD_RESET_MINUTES=30,
         RATELIMIT_STORAGE_URI=os.environ.get(
             "RATELIMIT_STORAGE_URI", "memory://"),
+        # uploads: 25 MB files (a little extra room for the form data)
+        MAX_CONTENT_LENGTH=26 * 1024 * 1024,
+        UPLOAD_DIR=os.environ.get("UPLOAD_DIR")
+        or os.path.join(app.instance_path, "uploads"),
     )
     if test_config:
         app.config.update(test_config)
 
     os.makedirs(app.instance_path, exist_ok=True)
+    os.makedirs(app.config["UPLOAD_DIR"], exist_ok=True)
     db.init_app(app)
     login_manager.init_app(app)
     csrf.init_app(app)
@@ -65,24 +70,35 @@ def create_app(test_config=None):
     def load_user(user_id):
         return db.session.get(User, int(user_id))
 
+    @app.errorhandler(413)
+    def too_large(error):
+        return jsonify({"ok": False, "error": "That file is too big. The limit is 25 MB."}), 413
+
     from .auth import auth_bp
     from .main import main_bp
     from .chats import chats_bp
+    from .media import media_bp
     from .realtime import register_socket_handlers
     app.register_blueprint(auth_bp)
     app.register_blueprint(main_bp)
     app.register_blueprint(chats_bp)
+    app.register_blueprint(media_bp)
     register_socket_handlers(socketio)
 
     with app.app_context():
-        db.create_all()          # also creates the new message_hidden table
+        db.create_all()          # creates the new message_star table
         migrate_additive_columns()
+
+    # one background job that deletes disappeared messages and their files
+    if not test_config and (not app.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true"):
+        from .media import start_purger
+        start_purger(app)
 
     return app
 
 
 def migrate_additive_columns():
-    from .models import Message, User
+    from .models import Chat, Message, User
 
     database_url = str(db.engine.url)
     if database_url in {"sqlite://", "sqlite:///:memory:"}:
@@ -96,6 +112,14 @@ def migrate_additive_columns():
             "edited_at": timestamp_type,
             "deleted_at": timestamp_type,
             "reply_to_id": "INTEGER",
+            "kind": "VARCHAR(16) NOT NULL DEFAULT 'text'",
+            "media_name": "VARCHAR(255)",
+            "media_size": "INTEGER",
+            "media_duration": "INTEGER",
+            "expires_at": timestamp_type,
+        },
+        Chat.__tablename__: {
+            "disappear_seconds": "INTEGER NOT NULL DEFAULT 0",
         },
     }
     with db.engine.begin() as connection:

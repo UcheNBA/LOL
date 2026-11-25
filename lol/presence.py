@@ -30,3 +30,9 @@ def disconnect_socket(socket_id):
 def is_online(user_id):
     with _lock:
         return bool(_sockets_by_user.get(user_id))
+
+
+def sockets_for(user_id):
+    """Every open connection (tab or phone) this user currently has."""
+    with _lock:
+        return list(_sockets_by_user.get(user_id, ()))

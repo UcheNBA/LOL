@@ -13,6 +13,10 @@
             </div><button class="icon-button new-chat-button" type="button" title="Start a chat"
                 aria-label="Start a chat">＋</button>
         </div>
+        <div class="sidebar-tools">
+            <button type="button" id="new-group">👥 New group</button>
+            <button type="button" id="open-starred">★ Starred</button>
+        </div>
         <label class="chat-search"><span aria-hidden="true">⌕</span><input id="chat-filter" type="search"
                 placeholder="Search conversations" autocomplete="off" aria-label="Search conversations"></label>
         <div class="chat-list" id="chat-list" role="list" aria-label="Conversations">
@@ -57,7 +61,8 @@
                     id="active-avatar">?</span>
                 <div class="conversation-person"><strong id="active-title">Conversation</strong><small
                         id="active-subtitle">@username</small><small class="presence-label"
-                        id="active-presence"></small></div><span class="head-decoration" aria-hidden="true">•••</span>
+                        id="active-presence"></small></div><button class="icon-button head-decoration" id="chat-info"
+                    type="button" aria-label="Chat info" title="Chat info">⋮</button>
             </header>
             <div class="message-history" id="message-history" role="log" aria-label="Messages" aria-live="polite"
                 tabindex="0">
@@ -65,13 +70,19 @@
                 <div class="message-stream" id="message-stream"></div>
             </div>
             <form class="composer" id="message-form"><button class="composer-tool" id="emoji-toggle" type="button"
-                    aria-label="Insert emoji" title="Insert emoji">☺</button><label class="composer-input"><span
-                        class="sr-only">Write a message</span><textarea id="message-input" rows="1" maxlength="4000"
-                        placeholder="Write a message…" autocomplete="off" enterkeyhint="send"></textarea></label><button
-                    class="edit-cancel" id="edit-cancel" type="button" hidden aria-label="Cancel edit">Cancel</button><button
-                    class="send-button" id="send-button" type="submit" aria-label="Send message"
-                    title="Send message"><span aria-hidden="true">↗</span></button></form>
-            <p class="composer-footnote">A good thought is always worth sending.</p>
+                    aria-label="Insert emoji" title="Insert emoji">☺</button><button class="composer-tool"
+                    id="attach-button" type="button" aria-label="Attach a photo or file"
+                    title="Attach a photo or file">📎</button><input id="file-input" type="file" hidden
+                    accept="image/*,audio/*,.pdf,.txt,.csv,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip,.rtf,.odt"><label
+                    class="composer-input"><span class="sr-only">Write a message</span><textarea id="message-input"
+                        rows="1" maxlength="4000" placeholder="Write a message…" autocomplete="off"
+                        enterkeyhint="send"></textarea></label><button class="edit-cancel" id="edit-cancel"
+                    type="button" hidden aria-label="Cancel edit">Cancel</button><button class="composer-tool"
+                    id="mic-button" type="button" aria-label="Record a voice message"
+                    title="Record a voice message">🎤</button><button class="send-button" id="send-button"
+                    type="submit" aria-label="Send message" title="Send message"><span
+                        aria-hidden="true">↗</span></button></form>
+            <p class="composer-footnote">*bold* · _italic_ · ~strike~ · `code`</p>
         </div>
         <div class="emoji-picker" id="emoji-picker" role="toolbar" aria-label="Emoji picker" hidden></div>
     </section>
@@ -87,5 +98,6 @@
 </dialog>
 <script defer src="https://cdn.socket.io/4.8.1/socket.io.min.js" crossorigin="anonymous"></script>
 <script id="initial-chats" type="application/json">{{ chats | tojson }}</script>
-<script defer src="{{ url_for('static', filename='js/chat.js', v=2) }}"></script>
+<script defer src="{{ url_for('static', filename='js/chat.js', v=3) }}"></script>
+<script defer src="{{ url_for('static', filename='js/chat-plus.js', v=1) }}"></script>
 {% endblock %}

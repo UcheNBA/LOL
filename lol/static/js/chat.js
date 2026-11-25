@@ -42,6 +42,8 @@
     let lastPeople = [];
     let toastTimer;
     let hoverTimer;
+    let stickBottom = true;
+    let voice = null;                 // the voice note that is playing, if any
     const renderedIds = new Set();
     const messageCache = new Map();   // message id -> message data
     const chatCache = new Map();      // chat id -> { messages, hasMore }, for instant paint
@@ -64,6 +66,7 @@
     const emojis = ["😀", "😂", "🥹", "😍", "😊", "😮", "😢", "🙏", "👏", "👍", "❤️", "🔥", "🎉", "✨", "💯", "☕"];
     const quickDefaults = ["❤️", "😂", "👍", "😮", "😢", "🙏"];
     const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const DISAPPEAR_LABELS = { 86400: "24 hours", 604800: "7 days", 7776000: "90 days" };
 
     const request = async (url, options = {}) => {
         const response = await fetch(url, {
@@ -89,12 +92,87 @@
     const formatLastSeen = (value) => value
         ? `last seen ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value))}`
         : "last seen recently";
+    const formatBytes = (bytes) => {
+        const n = Number(bytes) || 0;
+        if (n < 1024) return `${n} B`;
+        if (n < 1048576) return `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB`;
+        return `${(n / 1048576).toFixed(1)} MB`;
+    };
+    const clockText = (total) => {
+        const s = Math.max(0, Math.round(Number(total) || 0));
+        return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+    };
+    const hueOf = (value) => {
+        let hash = 0;
+        for (const char of String(value)) hash = (hash * 31 + char.charCodeAt(0)) % 360;
+        return hash;
+    };
+    function listTime(iso) {
+        const date = new Date(iso);
+        if (Number.isNaN(date.getTime())) return "";
+        const now = new Date();
+        if (date.toDateString() === now.toDateString()) return formatClock(date);
+        const yesterday = new Date(now.getTime() - 86400000);
+        if (date.toDateString() === yesterday.toDateString()) return "Yesterday";
+        return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(date);
+    }
+    function fileIcon(name) {
+        const ext = String(name).split(".").pop().toLowerCase();
+        if (ext === "pdf") return "📕";
+        if (["doc", "docx", "rtf", "odt"].includes(ext)) return "📘";
+        if (["xls", "xlsx", "csv"].includes(ext)) return "📗";
+        if (["ppt", "pptx"].includes(ext)) return "📙";
+        if (ext === "zip") return "🗜️";
+        if (ext === "txt") return "📄";
+        if (["mp3", "m4a", "wav", "ogg", "oga", "aac", "webm", "mp4"].includes(ext)) return "🎵";
+        return "📎";
+    }
 
     let isEmojiOnly = () => false;
     try {
         const pattern = /^(?:\p{Extended_Pictographic}(?:\uFE0F|\u200D|\p{Emoji_Modifier})*\s*){1,3}$/u;
         isEmojiOnly = (text) => pattern.test(String(text).trim());
     } catch { /* older browsers just show normal bubbles */ }
+
+    /* ---------- Message formatting: *bold* _italic_ ~strike~ `code` links ---------- */
+
+    function formatText(raw) {
+        const stash = [];
+        const keep = (html) => { stash.push(html); return `\u0000${stash.length - 1}\u0000`; };
+        let s = String(raw ?? "").replace(/\u0000/g, "");
+        s = s.replace(/```([\s\S]+?)```/g, (_, code) => keep(`<code class="code-block">${escapeHTML(code.replace(/^\n|\n$/g, ""))}</code>`));
+        s = s.replace(/`([^`\n]+?)`/g, (_, code) => keep(`<code>${escapeHTML(code)}</code>`));
+        s = s.replace(/\bhttps?:\/\/[^\s<>"']+[^\s<>"'.,;:!?)\]]/gi, (url) => keep(`<a href="${escapeAttribute(url)}" target="_blank" rel="noopener noreferrer nofollow">${escapeHTML(url)}</a>`));
+        s = escapeHTML(s);
+        s = s.replace(/(^|[\s(])\*([^\s*](?:[^*\n]*[^\s*])?)\*(?=$|[\s).,!?:;])/g, "$1<strong>$2</strong>");
+        s = s.replace(/(^|[\s(])_([^\s_](?:[^_\n]*[^\s_])?)_(?=$|[\s).,!?:;])/g, "$1<em>$2</em>");
+        s = s.replace(/(^|[\s(])~([^\s~](?:[^~\n]*[^\s~])?)~(?=$|[\s).,!?:;])/g, "$1<del>$2</del>");
+        return s.replace(/\u0000(\d+)\u0000/g, (_, index) => stash[Number(index)]);
+    }
+
+    /* ---------- One-line descriptions of a message ---------- */
+
+    function previewCore(message) {
+        if (message.deleted) return "🚫 Message deleted";
+        if (message.kind === "image") return `📷 ${message.body || "Photo"}`;
+        if (message.kind === "voice") return `🎤 Voice message${message.media?.duration ? ` (${clockText(message.media.duration)})` : ""}`;
+        if (message.kind === "file") return `📎 ${message.media?.name || "File"}`;
+        return message.body || "";
+    }
+
+    function summaryFor(chat, message) {
+        const core = previewCore(message);
+        if (chat.type !== "group" || message.kind === "system" || message.deleted) return core;
+        const who = isOwnMessage(message) ? "You" : ((message.sender_name || "").split(/\s+/)[0] || "Someone");
+        return `${who}: ${core}`;
+    }
+
+    function subtitleFor(chat) {
+        const base = chat.type === "group"
+            ? `${chat.member_count || 0} members`
+            : (chat.username ? `@${chat.username}` : "A direct conversation");
+        return chat.disappear_seconds ? `${base} · ⏱ ${DISAPPEAR_LABELS[chat.disappear_seconds] || "timer on"}` : base;
+    }
 
     function presenceText(chat) {
         if (chat.type === "group") return "";
@@ -213,6 +291,17 @@
         label.classList.toggle("is-online", Boolean(typing || activeChat.online));
     }
 
+    function refreshHeader() {
+        const chat = activeChat;
+        if (!chat) return;
+        document.querySelector("#active-title").textContent = chat.title;
+        document.querySelector("#active-subtitle").textContent = subtitleFor(chat);
+        const avatar = document.querySelector("#active-avatar");
+        avatar.innerHTML = avatarHTML(chat);
+        avatar.className = "avatar avatar-current";
+        updateHeaderStatus();
+    }
+
     /* ---------- Chat list ---------- */
 
     function previewFor(chat) {
@@ -228,8 +317,9 @@
         const badge = chat.unread ? `<span class="unread-badge">${chat.unread > 99 ? "99+" : chat.unread}</span>` : "";
         const preview = previewFor(chat);
         const dot = chat.online && chat.type !== "group" ? '<i class="online-dot" aria-hidden="true"></i>' : "";
+        const when = chat.last_at ? listTime(chat.last_at) : (chat.time || "");
         return `<button class="chat-row${active}" type="button" role="listitem" data-chat-id="${chat.id}" data-search="${escapeAttribute(`${chat.title} ${chat.username || ""}`.toLowerCase())}">
-      <span class="avatar-wrap"><span class="avatar avatar-sky">${avatarHTML(chat)}</span>${dot}</span><span class="chat-row-copy"><span class="chat-row-top"><strong>${escapeHTML(chat.title)}</strong><time>${escapeHTML(chat.time || "")}</time></span><span class="chat-row-bottom"><span class="chat-preview${preview.cls}">${preview.label ? `<em>${preview.label}</em>` : ""}${escapeHTML(preview.text)}</span>${badge}</span></span></button>`;
+      <span class="avatar-wrap"><span class="avatar avatar-sky">${avatarHTML(chat)}</span>${dot}</span><span class="chat-row-copy"><span class="chat-row-top"><strong>${escapeHTML(chat.title)}</strong><time>${escapeHTML(when)}</time></span><span class="chat-row-bottom"><span class="chat-preview${preview.cls}">${preview.label ? `<em>${preview.label}</em>` : ""}${escapeHTML(preview.text)}</span>${badge}</span></span></button>`;
     }
 
     function renderChatList() {
@@ -255,13 +345,55 @@
     function updateChatSummary(chatId, message) {
         const chat = chats.find((item) => Number(item.id) === Number(chatId));
         if (!chat) return;
-        chat.preview = message.deleted ? "🚫 Message deleted" : message.body;
+        chat.preview = summaryFor(chat, message);
         chat.time = formatClock(message.created_at);
+        chat.last_at = message.created_at;
         chat.updated_at = message.created_at;
-        if (!isOwnMessage(message) && (Number(activeChat?.id) !== Number(chatId) || !isNearLatest())) {
+        if (message.kind !== "system" && !isOwnMessage(message) && (Number(activeChat?.id) !== Number(chatId) || !isNearLatest())) {
             chat.unread = (chat.unread || 0) + 1;
         }
         renderChatList();
+    }
+
+    function upsertChat(chat) {
+        const index = chats.findIndex((item) => Number(item.id) === Number(chat.id));
+        if (index >= 0) chats[index] = chat;
+        else chats.unshift(chat);
+        renderChatList();
+        return chat;
+    }
+
+    async function refreshChats() {
+        try {
+            const data = await request("/api/chats");
+            const open = activeChat;
+            chats = data.chats;
+            if (open?.id) {
+                const fresh = chats.find((item) => Number(item.id) === Number(open.id));
+                if (fresh) {
+                    fresh.unread = 0;
+                    activeChat = fresh;
+                    refreshHeader();
+                } else {
+                    closeMissingChat();
+                }
+            }
+            renderChatList();
+        } catch { /* the next activity will refresh the list */ }
+    }
+
+    function closeMissingChat() {
+        openToken += 1;
+        stopTyping();
+        closeEmojiPicker();
+        cancelReply();
+        stopVoice();
+        activeChat = null;
+        shell.classList.remove("chat-open");
+        document.querySelector("#conversation-empty").hidden = false;
+        document.querySelector("#conversation-active").hidden = true;
+        document.dispatchEvent(new CustomEvent("lol:chat-change"));
+        showToast("You’re no longer in that chat.");
     }
 
     /* ---------- Per-chat message cache (instant reopen) ---------- */
@@ -292,7 +424,7 @@
     /* ---------- Message rendering ---------- */
 
     function statusHTML(message) {
-        if (!isOwnMessage(message) || message.deleted) return "";
+        if (!isOwnMessage(message) || message.deleted || message.kind === "system") return "";
         const status = message.status || "sent";
         return `<span class="message-status status-${status}" data-message-id="${message.id || ""}" aria-label="${status}">${status === "sent" ? "✓" : "✓✓"}</span>`;
     }
@@ -300,8 +432,9 @@
     function actionsHTML(message) {
         if (!message.id || message.deleted) return "";
         const mine = isOwnMessage(message);
+        const canEdit = mine && (message.kind || "text") === "text";
         const button = (action, label, icon) => `<button class="message-action" type="button" data-action="${action}" data-message-id="${message.id}" aria-label="${label}" title="${label}">${icon}</button>`;
-        return `<div class="message-actions">${button("react", "React to message", "＋")}${button("reply", "Reply", "↩")}${mine ? button("edit", "Edit message", "✎") : ""}${button("delete", "Delete message", "🗑")}</div>`;
+        return `<div class="message-actions">${button("react", "React to message", "＋")}${button("reply", "Reply", "↩")}${button("star", message.starred ? "Remove star" : "Star message", "★")}${canEdit ? button("edit", "Edit message", "✎") : ""}${button("delete", "Delete message", "🗑")}</div>`;
     }
 
     function replyQuoteHTML(message) {
@@ -317,22 +450,49 @@
         return `<button class="reaction-chip${reaction.reacted ? " is-selected" : ""}" type="button" data-action="react-chip" data-message-id="${messageId}" data-emoji="${escapeAttribute(reaction.emoji)}" aria-label="${escapeAttribute(reaction.emoji)} reaction, ${reaction.count}">${escapeHTML(reaction.emoji)} <span>${reaction.count}</span></button>`;
     }
 
+    function mediaHTML(message) {
+        const media = message.media;
+        if (!media || message.deleted) return "";
+        const url = escapeAttribute(media.url);
+        const name = escapeAttribute(media.name);
+        if (message.kind === "image") {
+            return `<button class="media-image" type="button" data-lightbox="${url}" data-name="${name}" aria-label="Open photo ${name}"><img src="${url}" alt="${name}" loading="lazy"></button>`;
+        }
+        if (message.kind === "voice") {
+            return `<div class="voice" data-voice="${url}" data-duration="${Number(media.duration) || 0}"><button class="voice-play" type="button" aria-label="Play voice message"><span class="v-play">▶</span><span class="v-pause">❚❚</span></button><div class="voice-track" role="progressbar" aria-label="Voice message progress"><i></i></div><span class="voice-time">${clockText(media.duration)}</span></div>`;
+        }
+        return `<a class="media-file" href="${url}" download="${name}"><span class="file-icon" aria-hidden="true">${fileIcon(media.name)}</span><span class="file-meta"><b>${escapeHTML(media.name)}</b><small>${formatBytes(media.size)}</small></span><span class="file-dl" aria-hidden="true">⬇</span></a>`;
+    }
+
     function bubbleHTML(message) {
+        if (message.kind === "system") {
+            return `<div class="system-line"><span>${escapeHTML(message.body)}</span></div>`;
+        }
         const mine = isOwnMessage(message);
+        const group = activeChat?.type === "group";
+        const kind = message.kind || "text";
         const reactions = message.deleted ? "" : (message.reactions || []).map((reaction) => reactionChip(message.id, reaction)).join("");
-        const big = !message.deleted && !message.reply_to && isEmojiOnly(message.body || "");
-        const body = message.deleted
+        const big = !message.deleted && kind === "text" && !message.reply_to && isEmojiOnly(message.body || "");
+        const sender = group && !mine && !message.deleted
+            ? `<b class="sender" style="--h:${hueOf(message.sender_id)}">${escapeHTML(message.sender_name || "Someone")}</b>` : "";
+        const caption = message.body ? `<p>${formatText(message.body)}</p>` : "";
+        const content = message.deleted
             ? `<p class="deleted-text">🚫 ${mine ? "You deleted this message" : "This message was deleted"}</p>`
-            : `${replyQuoteHTML(message)}<p>${escapeHTML(message.body)}</p>`;
+            : `${sender}${replyQuoteHTML(message)}${mediaHTML(message)}${caption}`;
         const edited = !message.deleted && message.edited ? '<span class="message-edited">edited</span>' : "";
-        return `<div class="message-content"><div class="message-bubble${message.deleted ? " is-deleted" : ""}${big ? " emoji-only" : ""}">${body}<footer>${edited}<time>${escapeHTML(message.time || formatClock(message.created_at))}</time>${statusHTML(message)}</footer></div>${actionsHTML(message)}<div class="reaction-list" data-reactions-for="${message.id || ""}">${reactions}</div></div>`;
+        const star = !message.deleted && message.starred ? '<span class="msg-star" title="Starred">★</span>' : "";
+        const timer = !message.deleted && message.expires_at ? '<span class="msg-timer" title="Disappearing message">⏱</span>' : "";
+        const time = message.created_at ? formatClock(message.created_at) : (message.time || "");
+        const classes = ["message-bubble"];
+        if (message.deleted) classes.push("is-deleted");
+        if (big) classes.push("emoji-only");
+        if (!message.deleted && kind === "image") classes.push("has-photo");
+        return `<div class="message-content"><div class="${classes.join(" ")}">${content}<footer>${star}${timer}${edited}<time>${escapeHTML(time)}</time>${statusHTML(message)}</footer></div>${actionsHTML(message)}<div class="reaction-list" data-reactions-for="${message.id || ""}">${reactions}</div></div>`;
     }
 
     function cacheMessage(message) {
         if (message.id) messageCache.set(String(message.id), { ...messageCache.get(String(message.id)), ...message });
     }
-
-    /* day dividers */
 
     const dayKey = (timestamp) => new Date(Number(timestamp)).toDateString();
 
@@ -369,6 +529,7 @@
                 .find((item) => item.dataset.clientId === String(message.client_id));
             if (existing && message.id) {
                 existing.dataset.messageId = message.id;
+                if (message.expires_at) existing.dataset.expires = String(Date.parse(message.expires_at));
                 existing.innerHTML = bubbleHTML(message);
                 if (isOwnMessage(message) && message.status) updateStatus(message.id, message.status);
             }
@@ -376,21 +537,22 @@
         }
         stream.querySelectorAll(".empty-chat, .skeleton-row").forEach((node) => node.remove());
         renderedIds.add(String(message.client_id));
+        const system = message.kind === "system";
         const mine = isOwnMessage(message);
         const wasNearLatest = isNearLatest();
         const row = document.createElement("article");
-        row.className = `message-row ${mine ? "message-mine" : "message-theirs"}${live ? " is-new" : ""}`;
+        row.className = `message-row ${system ? "message-system" : mine ? "message-mine" : "message-theirs"}${live ? " is-new" : ""}`;
         row.dataset.messageId = message.id || "";
         row.dataset.clientId = message.client_id;
         row.dataset.ts = String(Date.parse(message.created_at) || Date.now());
         row.dataset.day = dayKey(row.dataset.ts);
+        if (message.expires_at) row.dataset.expires = String(Date.parse(message.expires_at));
         row.innerHTML = bubbleHTML(message);
         if (prepend) stream.prepend(row);
         else stream.append(row);
         if (live) row.addEventListener("animationend", () => row.classList.remove("is-new"), { once: true });
         if (!batch) relabelDays();
-        // Only live messages need a "received" note; opening the chat already marks history as read.
-        if (message.id && !mine && socket && activeChat && !batch && message.status !== "read") {
+        if (message.id && !mine && !system && socket && activeChat && !batch && message.status !== "read") {
             socket.emit("message:received", { message_id: message.id, read: document.visibilityState === "visible" && wasNearLatest });
         }
         if (mine && message.id && message.status) updateStatus(message.id, message.status);
@@ -408,7 +570,7 @@
         const row = stream.querySelector(`[data-message-id="${message.id}"]`);
         if (!row) return;
         const body = row.querySelector(".message-bubble p:not(.deleted-text)");
-        if (body) body.textContent = message.body;
+        if (body) body.innerHTML = formatText(message.body);
         let edited = row.querySelector(".message-edited");
         if (!edited) {
             edited = document.createElement("span");
@@ -419,7 +581,7 @@
         stream.querySelectorAll(`.reply-quote[data-jump="${message.id}"] span`).forEach((node) => { node.textContent = message.body; });
         const chat = chats.find((item) => Number(item.id) === Number(message.chat_id));
         if (chat?.last_message_id === message.id) {
-            chat.preview = message.body;
+            chat.preview = summaryFor(chat, message);
             renderChatList();
         }
     }
@@ -441,6 +603,129 @@
         if (Number(activeChat?.id) === Number(chat.id)) updateHeaderStatus();
     }
 
+    /* ---------- Stars ---------- */
+
+    function applyStar(messageId, starred) {
+        const id = String(messageId);
+        const cached = messageCache.get(id);
+        if (cached) cached.starred = starred;
+        patchCached(cached?.chat_id ?? activeChat?.id, id, { starred });
+        const row = stream.querySelector(`.message-row[data-message-id="${id}"]`);
+        if (!row) return;
+        const footer = row.querySelector(".message-bubble footer");
+        const existing = footer?.querySelector(".msg-star");
+        if (starred && footer && !existing) {
+            const mark = document.createElement("span");
+            mark.className = "msg-star";
+            mark.title = "Starred";
+            mark.textContent = "★";
+            footer.prepend(mark);
+        } else if (!starred && existing) {
+            existing.remove();
+        }
+        const button = row.querySelector('[data-action="star"]');
+        if (button) {
+            const label = starred ? "Remove star" : "Star message";
+            button.title = label;
+            button.setAttribute("aria-label", label);
+        }
+    }
+
+    function toggleStar(messageId) {
+        if (!socket?.connected) {
+            showToast("Reconnect to star messages.");
+            return;
+        }
+        socket.emit("message:star", { message_id: Number(messageId) }, (result) => {
+            if (!result?.ok) {
+                showToast(result?.error || "Couldn’t star that message.");
+                return;
+            }
+            applyStar(messageId, result.starred);
+            showToast(result.starred ? "Starred ★" : "Removed from starred");
+        });
+    }
+
+    /* ---------- Voice notes ---------- */
+
+    function paintVoice(el, seconds, total) {
+        const fill = el.querySelector(".voice-track i");
+        if (fill) fill.style.width = total ? `${clamp((seconds / total) * 100, 0, 100)}%` : "0%";
+        const label = el.querySelector(".voice-time");
+        if (label) label.textContent = clockText(seconds > 0 ? seconds : total);
+    }
+
+    function stopVoice() {
+        if (!voice) return;
+        voice.audio.pause();
+        voice.el.classList.remove("is-playing");
+        paintVoice(voice.el, 0, voice.total);
+        voice = null;
+    }
+
+    function toggleVoice(el) {
+        if (voice && voice.el === el) {
+            if (voice.audio.paused) {
+                voice.audio.play().catch(() => { /* ignore */ });
+                el.classList.add("is-playing");
+            } else {
+                voice.audio.pause();
+                el.classList.remove("is-playing");
+            }
+            return;
+        }
+        stopVoice();
+        const total = Number(el.dataset.duration) || 0;
+        const audio = new Audio(el.dataset.voice);
+        const current = { audio, el, total };
+        voice = current;
+        audio.addEventListener("timeupdate", () => {
+            const length = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : total;
+            paintVoice(el, audio.currentTime, length);
+        });
+        audio.addEventListener("ended", () => {
+            el.classList.remove("is-playing");
+            paintVoice(el, 0, total);
+            if (voice === current) voice = null;
+        });
+        audio.addEventListener("error", () => {
+            el.classList.remove("is-playing");
+            showToast("Couldn’t play that voice message.");
+            if (voice === current) voice = null;
+        });
+        audio.play().then(() => el.classList.add("is-playing")).catch(() => {
+            showToast("Couldn’t play that voice message.");
+            if (voice === current) voice = null;
+        });
+    }
+
+    function seekVoice(track, event) {
+        const el = track.closest(".voice");
+        if (!voice || voice.el !== el) return;
+        const length = Number.isFinite(voice.audio.duration) && voice.audio.duration > 0 ? voice.audio.duration : voice.total;
+        if (!length) return;
+        const box = track.getBoundingClientRect();
+        voice.audio.currentTime = clamp((event.clientX - box.left) / box.width, 0, 1) * length;
+    }
+
+    /* ---------- Photo viewer ---------- */
+
+    function openLightbox(url, name) {
+        const dlg = document.createElement("dialog");
+        dlg.className = "lightbox";
+        dlg.innerHTML = '<button type="button" class="lightbox-close" aria-label="Close photo">✕</button><a class="lightbox-save">⬇ Save</a><img alt="">';
+        const image = dlg.querySelector("img");
+        image.src = url;
+        image.alt = name || "Photo";
+        const save = dlg.querySelector(".lightbox-save");
+        save.href = url;
+        save.download = name || "photo";
+        dlg.addEventListener("click", (event) => { if (!event.target.closest(".lightbox-save")) dlg.close(); });
+        dlg.addEventListener("close", () => dlg.remove());
+        document.body.append(dlg);
+        dlg.showModal();
+    }
+
     /* ---------- Loading states ---------- */
 
     function showSkeleton() {
@@ -460,7 +745,7 @@
         const box = document.createElement("div");
         box.className = "empty-chat";
         box.innerHTML = '<div class="empty-wave">👋</div><strong></strong><p>No messages yet. Break the ice!</p><div class="icebreakers"></div>';
-        box.querySelector("strong").textContent = `Say hi to ${chat.title}`;
+        box.querySelector("strong").textContent = chat.type === "group" ? `Say hi to ${chat.title}` : `Say hi to ${chat.title}`;
         ["Hey 👋", "How’s your day going?", "😂", "What’s up?"].forEach((text) => {
             const button = document.createElement("button");
             button.type = "button";
@@ -486,6 +771,7 @@
         relabelDays();
         oldestMessageId = messages[0].id;
         history.scrollTop = history.scrollHeight;
+        stickBottom = true;
         updateJump();
     }
 
@@ -549,9 +835,9 @@
 
     function markDeleted(data) {
         const id = String(data.message_id);
-        const message = { ...(messageCache.get(id) || { id: data.message_id }), deleted: true, body: "", reactions: [] };
+        const message = { ...(messageCache.get(id) || { id: data.message_id }), deleted: true, body: "", media: null, reactions: [] };
         messageCache.set(id, message);
-        patchCached(data.chat_id, id, { deleted: true, body: "", reactions: [] });
+        patchCached(data.chat_id, id, { deleted: true, body: "", media: null, reactions: [] });
         const row = stream.querySelector(`.message-row[data-message-id="${id}"]`);
         if (row) row.innerHTML = bubbleHTML(message);
         stream.querySelectorAll(`.reply-quote[data-jump="${id}"] span`).forEach((node) => { node.textContent = "🚫 Message deleted"; });
@@ -564,13 +850,17 @@
         }
     }
 
-    function removeMessageRow(id) {
+    function removeRow(row) {
         const entry = chatCache.get(Number(activeChat?.id));
-        if (entry) entry.messages = entry.messages.filter((item) => String(item.id) !== String(id));
-        const row = stream.querySelector(`.message-row[data-message-id="${id}"]`);
-        if (!row) return;
+        if (entry && row.dataset.messageId) entry.messages = entry.messages.filter((item) => String(item.id) !== row.dataset.messageId);
         renderedIds.delete(row.dataset.clientId);
         row.remove();
+    }
+
+    function removeMessageRow(id) {
+        const row = stream.querySelector(`.message-row[data-message-id="${id}"]`);
+        if (!row) return;
+        removeRow(row);
         relabelDays();
     }
 
@@ -614,7 +904,7 @@
         const dlg = document.createElement("dialog");
         dlg.className = "confirm-dialog";
         dlg.innerHTML = `<div class="confirm-body"><h2>Delete message?</h2><p class="confirm-preview"></p><div class="confirm-actions">${isOwnMessage(message) ? '<button type="button" class="is-danger" data-scope="everyone">Delete for everyone</button>' : ""}<button type="button" class="is-danger" data-scope="me">Delete for me</button><button type="button" data-cancel>Cancel</button></div></div>`;
-        dlg.querySelector(".confirm-preview").textContent = (message.body || "").slice(0, 120);
+        dlg.querySelector(".confirm-preview").textContent = previewCore(message).slice(0, 120);
         dlg.addEventListener("click", (event) => {
             const button = event.target.closest("button");
             if (event.target === dlg || button?.hasAttribute("data-cancel")) {
@@ -630,6 +920,21 @@
         dlg.showModal();
     }
 
+    /* ---------- Disappearing messages: remove them from screen when time is up ---------- */
+
+    function sweepExpired() {
+        if (!activeChat) return;
+        const now = Date.now();
+        const gone = [...stream.querySelectorAll(".message-row[data-expires]")].filter((row) => Number(row.dataset.expires) <= now);
+        if (!gone.length) return;
+        gone.forEach(removeRow);
+        relabelDays();
+        if (!stream.querySelector(".message-row")) showEmptyChat(activeChat);
+        updateJump();
+        refreshChats();
+    }
+    window.setInterval(sweepExpired, 4000);
+
     /* ---------- Reply ---------- */
 
     const replyBar = document.createElement("div");
@@ -641,11 +946,11 @@
 
     function startReply(messageId) {
         const message = messageCache.get(String(messageId));
-        if (!message || message.deleted) return;
+        if (!message || message.deleted || message.kind === "system") return;
         if (editingMessageId) cancelEditing();
-        replyTo = { id: message.id, body: message.body, sender_id: message.sender_id, sender_name: message.sender_name };
+        replyTo = { id: message.id, body: previewCore(message), sender_id: message.sender_id, sender_name: message.sender_name };
         replyBar.querySelector("b").textContent = isOwnMessage(message) ? "You" : (message.sender_name || activeChat?.title || "Reply");
-        replyBar.querySelector("span").textContent = message.body;
+        replyBar.querySelector("span").textContent = previewCore(message);
         replyBar.hidden = false;
         input.focus();
     }
@@ -671,13 +976,15 @@
     /* ---------- Edit (your unsent draft is kept safe while editing) ---------- */
 
     function startEditing(messageId) {
-        const row = stream.querySelector(`.message-row[data-message-id="${messageId}"]`);
-        const body = row?.querySelector(".message-bubble p:not(.deleted-text)");
-        if (!body) return;
+        const message = messageCache.get(String(messageId));
+        if (!message || message.deleted || (message.kind || "text") !== "text") {
+            showToast("Only text messages can be edited.");
+            return;
+        }
         cancelReply();
         if (!editingMessageId) draftBeforeEdit = input.value;
         editingMessageId = Number(messageId);
-        input.value = body.textContent;
+        input.value = message.body;           // the original text, with its *formatting* marks
         autosize();
         sendButton.setAttribute("aria-label", "Save edited message");
         sendButton.title = "Save edit";
@@ -700,10 +1007,11 @@
         if (name === "reply") startReply(messageId);
         else if (name === "edit") startEditing(messageId);
         else if (name === "delete") confirmDelete(messageId);
+        else if (name === "star") toggleStar(messageId);
         else if (name === "copy") {
             const message = messageCache.get(String(messageId));
-            if (!navigator.clipboard || !message) {
-                showToast("Copy isn’t available here.");
+            if (!navigator.clipboard || !message?.body) {
+                showToast(message?.body ? "Copy isn’t available here." : "Nothing to copy.");
                 return;
             }
             navigator.clipboard.writeText(message.body).then(() => showToast("Copied"), () => showToast("Couldn’t copy."));
@@ -859,7 +1167,9 @@
     function openReactionWheel(messageId, point) {
         const row = stream.querySelector(`.message-row[data-message-id="${messageId}"]`);
         if (!row) return;
+        const message = messageCache.get(String(messageId)) || {};
         const mine = row.classList.contains("message-mine");
+        const canEdit = mine && (message.kind || "text") === "text";
         const bubble = row.querySelector(".message-bubble").getBoundingClientRect();
         const reach = RING + ITEM / 2 + 14;
         const rawX = point && point.x > 0 ? point.x : bubble.left + bubble.width / 2;
@@ -871,14 +1181,14 @@
         const quick = [...new Set([...readRecent(), ...quickDefaults])].slice(0, 12);
         wheel.groups = [{ icon: "🕘", name: "Quick", list: quick }, ...emojiGroups];
 
-        const action = (name, icon, label, cls = "") => `<button type="button" class="${cls}" data-act="${name}">${icon} ${label}</button>`;
+        const action = (name, icon, label, cls = "") => `<button type="button" class="${cls}" data-act="${name}" aria-label="${label}" title="${label}"><span aria-hidden="true">${icon}</span><span class="lbl">${label}</span></button>`;
         emojiPicker.dataset.mode = "reaction";
         emojiPicker.dataset.messageId = messageId;
         emojiPicker.innerHTML = `<div class="wheel-disc"></div><span class="wheel-pointer"></span>
             <button type="button" class="wheel-close" data-close aria-label="Close reactions">✕</button>
             <div class="wheel-items"></div>
             <div class="wheel-hub"><button type="button" data-cat="-1" aria-label="Previous group">‹</button><div class="wheel-hub-info"><span class="wheel-hub-icon"></span><small class="wheel-hub-name"></small></div><button type="button" data-cat="1" aria-label="Next group">›</button></div>
-            <div class="wheel-actions">${action("reply", "↩", "Reply")}${action("copy", "⧉", "Copy")}${mine ? action("edit", "✎", "Edit") : ""}${action("delete", "🗑", "Delete", "is-danger")}</div>`;
+            <div class="wheel-actions">${action("reply", "↩", "Reply")}${message.body ? action("copy", "⧉", "Copy") : ""}${canEdit ? action("edit", "✎", "Edit") : ""}${action("star", message.starred ? "★" : "☆", message.starred ? "Unstar" : "Star")}${action("delete", "🗑", "Delete", "is-danger")}</div>`;
         const items = emojiPicker.querySelector(".wheel-items");
         wheel.slots = Array.from({ length: 15 }, () => {
             const slot = document.createElement("button");
@@ -1046,6 +1356,7 @@
 
     function leaveChat() {
         stopTyping();
+        stopVoice();
         closeEmojiPicker();
         cancelReply();
         if (editingMessageId) cancelEditing();          // puts your earlier draft back first
@@ -1057,14 +1368,7 @@
     function paintHeader(chat) {
         document.querySelector("#conversation-empty").hidden = true;
         document.querySelector("#conversation-active").hidden = false;
-        document.querySelector("#active-title").textContent = chat.title;
-        document.querySelector("#active-subtitle").textContent = chat.type === "group"
-            ? "Group chat"
-            : (chat.username ? `@${chat.username}` : "A direct conversation");
-        const avatar = document.querySelector("#active-avatar");
-        avatar.innerHTML = avatarHTML(chat);
-        avatar.className = "avatar avatar-current";
-        updateHeaderStatus();
+        refreshHeader();
         shell.classList.add("chat-open");
     }
 
@@ -1074,6 +1378,7 @@
         activeChat = chat;
         messageCache.clear();
         newBelow = 0;
+        document.dispatchEvent(new CustomEvent("lol:chat-change"));
         paintHeader(chat);
         restoreDraft();
         return token;
@@ -1099,8 +1404,13 @@
         if (window.matchMedia("(min-width: 821px)").matches) input.focus({ preventScroll: true });
         if (socket) socket.emit("chat:join", { chat_id: chat.id });
         const cached = chatCache.get(Number(chat.id));
-        if (cached) paintMessages(cached.messages.slice(), cached.hasMore);
-        else showSkeleton();
+        if (cached) {
+            const now = Date.now();
+            const fresh = cached.messages.filter((message) => !message.expires_at || Date.parse(message.expires_at) > now);
+            paintMessages(fresh, cached.hasMore);
+        } else {
+            showSkeleton();
+        }
         return loadFirstPage(chat, token, Boolean(cached));
     }
 
@@ -1110,7 +1420,6 @@
             openChat(existing);                           // already have it: no network wait at all
             return;
         }
-        // Show the conversation immediately while the chat is created in the background.
         const provisional = {
             id: null, type: "direct", title: person.display_name, username: person.username,
             avatar_url: person.avatar_url, initial: person.initial, other_user_id: person.id, online: false,
@@ -1127,7 +1436,7 @@
             renderChatList();
             if (token !== openToken) return;
             activeChat = chat;
-            updateHeaderStatus();
+            refreshHeader();
             if (input.value.trim()) setDraft(chat.id, input.value);
             if (socket) socket.emit("chat:join", { chat_id: chat.id });
             if (data.created) {
@@ -1150,6 +1459,12 @@
     }
 
     function saveOutbox(messages) { localStorage.setItem(outboxKey, JSON.stringify(messages.slice(-100))); }
+
+    function receiveMessage(message) {
+        cacheIncoming(message);
+        if (Number(activeChat?.id) === Number(message.chat_id)) addMessage(message, { scroll: true });
+        updateChatSummary(message.chat_id, message);
+    }
 
     function sendQueuedMessage(message) {
         if (!socket) return;
@@ -1181,7 +1496,7 @@
         stopTyping();
         const message = { chat_id: activeChat.id, body, client_id: crypto.randomUUID() };
         if (replyTo) message.reply_to_id = replyTo.id;
-        const pending = { ...message, sender_id: Number(userId), created_at: new Date().toISOString(), time: formatClock(new Date()), status: "sent" };
+        const pending = { ...message, kind: "text", sender_id: Number(userId), created_at: new Date().toISOString(), status: "sent" };
         if (replyTo) pending.reply_to = { id: replyTo.id, body: replyTo.body, sender_id: replyTo.sender_id, sender_name: replyTo.sender_name, deleted: false };
         cancelReply();
         addMessage(pending, { scroll: true, live: true });
@@ -1258,6 +1573,7 @@
         leaveChat();
         activeChat = null;
         shell.classList.remove("chat-open");
+        document.dispatchEvent(new CustomEvent("lol:chat-change"));
         renderChatList();
         updateJump();
     });
@@ -1272,7 +1588,8 @@
     stream.addEventListener("pointerdown", (event) => {
         if (event.pointerType !== "touch") return;
         const row = event.target.closest(".message-row");
-        if (!row || !row.dataset.messageId || row.querySelector(".is-deleted")) return;
+        if (!row || !row.dataset.messageId || row.classList.contains("message-system") || row.querySelector(".is-deleted")) return;
+        if (event.target.closest(".voice-track")) return;
         swipe = { row, id: event.pointerId, x: event.clientX, y: event.clientY, dx: 0, active: false };
     });
     stream.addEventListener("pointermove", (event) => {
@@ -1310,6 +1627,22 @@
             sendNewMessage(icebreaker.dataset.icebreaker);
             return;
         }
+        const play = event.target.closest(".voice-play");
+        if (play) {
+            toggleVoice(play.closest(".voice"));
+            return;
+        }
+        const track = event.target.closest(".voice-track");
+        if (track) {
+            seekVoice(track, event);
+            return;
+        }
+        const photo = event.target.closest("[data-lightbox]");
+        if (photo) {
+            openLightbox(photo.dataset.lightbox, photo.dataset.name);
+            return;
+        }
+        if (event.target.closest("a, .voice")) return;       // links and files do their own thing
         const quote = event.target.closest("[data-jump]");
         if (quote) {
             jumpTo(quote.dataset.jump);
@@ -1332,6 +1665,11 @@
         if (!row || !row.dataset.messageId || row.querySelector(".is-deleted")) return; // unsent or deleted messages have no menu
         openEmojiPicker("reaction", row.dataset.messageId, { x: event.clientX, y: event.clientY });
     });
+    // photos load after the page scrolls: keep the bottom in view if you were at the bottom
+    stream.addEventListener("load", (event) => {
+        if (event.target.tagName === "IMG" && stickBottom) history.scrollTop = history.scrollHeight;
+    }, true);
+
     document.addEventListener("click", (event) => {
         if (emojiPicker.hidden) return;
         if (event.target.closest("#emoji-picker, #emoji-toggle, [data-action='react'], .message-bubble")) return;
@@ -1370,7 +1708,22 @@
         if (input.value.trim()) noteTyping();
         else stopTyping();
     });
+
+    function wrapSelection(mark) {
+        const start = input.selectionStart;
+        const end = input.selectionEnd;
+        const selected = input.value.slice(start, end);
+        input.setRangeText(`${mark}${selected}${mark}`, start, end, "end");
+        if (!selected) input.setSelectionRange(start + mark.length, start + mark.length);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+
     input.addEventListener("keydown", (event) => {
+        if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey) {
+            const key = event.key.toLowerCase();
+            if (key === "b") { event.preventDefault(); wrapSelection("*"); return; }
+            if (key === "i") { event.preventDefault(); wrapSelection("_"); return; }
+        }
         if (event.key === "Enter" && !event.shiftKey) {
             event.preventDefault();
             composer.requestSubmit();
@@ -1379,6 +1732,7 @@
 
     history.addEventListener("scroll", () => {
         if (emojiPicker.classList.contains("wheel")) closeEmojiPicker();
+        stickBottom = distanceFromBottom() < 120;
         updateJump();
         if (history.scrollTop < 24 && hasMore && oldestMessageId && !loadingOlder && activeChat?.id) {
             loadingOlder = true;
@@ -1407,13 +1761,13 @@
             if (Number(activeChat?.id) === Number(message.chat_id)) {
                 const away = distanceFromBottom() > 240;
                 addMessage(message, { scroll: true, live: true });
-                if (!isOwnMessage(message)) {
+                if (!isOwnMessage(message) && message.kind !== "system") {
                     setTyping(message.chat_id, "", false);
                     if (away) newBelow += 1;
                     if ((message.body || "").includes("🎉")) burst();
                 }
                 updateJump();
-            } else if (!isOwnMessage(message)) {
+            } else if (!isOwnMessage(message) && message.kind !== "system") {
                 setTyping(message.chat_id, "", false);
                 socket.emit("message:received", { message_id: message.id, read: false });
             }
@@ -1422,24 +1776,42 @@
         socket.on("message:status", (data) => updateStatus(data.message_id, data.status));
         socket.on("message:updated", updateMessage);
         socket.on("message:deleted", markDeleted);
+        socket.on("message:starred", (data) => applyStar(data.message_id, data.starred));
         socket.on("message:reactions", (data) => renderReactionList(data.message_id, data.reactions));
         socket.on("presence:update", setPresence);
-        socket.on("chat:activity", async () => {
-            try {
-                const data = await request("/api/chats");
-                const open = activeChat;
-                chats = data.chats;
-                if (open?.id) activeChat = chats.find((item) => Number(item.id) === Number(open.id)) || open;
-                renderChatList();
-                updateHeaderStatus();
-            } catch { /* Reconnection will refresh the list on the next activity. */ }
-        });
+        socket.on("chat:activity", refreshChats);
     }
     document.addEventListener("visibilitychange", () => {
         if (document.visibilityState === "visible" && activeChat?.id && socket?.connected) {
             socket.emit("chat:join", { chat_id: activeChat.id });
         }
     });
+
+    /* ---------- Shared with chat-plus.js (uploads, groups, stars list) ---------- */
+
+    window.LOLChat = {
+        userId: Number(userId),
+        csrf,
+        request,
+        showToast,
+        escapeHTML,
+        escapeAttribute,
+        avatarHTML,
+        formatBytes,
+        previewCore,
+        listTime,
+        fileIcon,
+        getSocket: () => socket,
+        getActiveChat: () => activeChat,
+        getChats: () => chats,
+        getReply: () => replyTo,
+        clearReply: cancelReply,
+        receiveMessage,
+        addChat: upsertChat,
+        refreshChats,
+        openChat,
+        jumpTo,
+    };
 
     renderChatList();
     if (socket) flushOutbox();

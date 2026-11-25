@@ -1,4 +1,5 @@
 from collections import defaultdict, deque
+from datetime import timedelta
 from time import monotonic
 
 from flask import request
@@ -8,8 +9,9 @@ from sqlalchemy import delete as sql_delete, select
 
 from .chat_service import member_for, message_payload
 from .extensions import db
-from .models import (Chat, ChatMember, Message, MessageHidden, MessageStatus,
-                     Reaction, User, utcnow)
+from .media import remove_media_files
+from .models import (Chat, ChatMember, Message, MessageHidden, MessageStar,
+                     MessageStatus, Reaction, User, utcnow)
 from .presence import connect_socket, disconnect_socket
 
 _send_times = defaultdict(deque)
@@ -23,16 +25,19 @@ def register_socket_handlers(socketio):
             select(ChatMember.user_id).where(ChatMember.chat_id == chat_id)
         ).all()
 
+    def fail(message):
+        return {"ok": False, "error": message}
+
     @socketio.on("chat:join")
     def join_chat(payload):
         if not current_user.is_authenticated:
-            return {"ok": False, "error": "Sign in required."}
+            return fail("Sign in required.")
         try:
             chat_id = int((payload or {}).get("chat_id"))
         except (TypeError, ValueError):
-            return {"ok": False, "error": "Invalid chat."}
+            return fail("Invalid chat.")
         if not member_for(chat_id, current_user.id):
-            return {"ok": False, "error": "Chat not found."}
+            return fail("Chat not found.")
         join_room(f"chat:{chat_id}")
         status_updates = []
         read_at = utcnow()
@@ -69,8 +74,6 @@ def register_socket_handlers(socketio):
             return
         if not member_for(chat_id, current_user.id):
             return
-        # Sent to each member's personal room, so it works even for a chat
-        # the other person hasn't opened yet.
         for user_id in member_user_ids(chat_id):
             if user_id != current_user.id:
                 socketio.emit("typing", {
@@ -83,35 +86,35 @@ def register_socket_handlers(socketio):
     @socketio.on("message:send")
     def send_message(payload):
         if not current_user.is_authenticated:
-            return {"ok": False, "error": "Sign in required."}
+            return fail("Sign in required.")
         payload = payload or {}
         try:
             chat_id = int(payload.get("chat_id"))
         except (TypeError, ValueError):
-            return {"ok": False, "error": "Invalid chat."}
+            return fail("Invalid chat.")
         member = member_for(chat_id, current_user.id)
         if not member:
-            return {"ok": False, "error": "Chat not found."}
+            return fail("Chat not found.")
         body = str(payload.get("body", "")).strip()
         client_id = str(payload.get("client_id", ""))
         if not body or len(body) > 4000 or len(client_id) > 64 or not client_id:
-            return {"ok": False, "error": "Message must contain 1-4000 characters."}
+            return fail("Message must contain 1-4000 characters.")
         now = monotonic()
         recent = _send_times[current_user.id]
         while recent and now - recent[0] > 60:
             recent.popleft()
         if len(recent) >= 30:
-            return {"ok": False, "error": "You are sending messages too quickly."}
+            return fail("You are sending messages too quickly.")
         recent.append(now)
 
         message = db.session.scalar(
             select(Message).where(Message.client_id == client_id))
         if message:
             if message.sender_id != current_user.id or message.chat_id != chat_id:
-                return {"ok": False, "error": "Message identifier already used."}
+                return fail("Message identifier already used.")
             return {"ok": True, "message": message_payload(message, current_user.id)}
 
-        # Reply: only to a live message in the same chat.
+        # Reply: only to a live, normal message in the same chat.
         reply_to_id = None
         try:
             requested_reply = int(payload.get("reply_to_id"))
@@ -119,13 +122,18 @@ def register_socket_handlers(socketio):
             requested_reply = None
         if requested_reply is not None:
             parent = db.session.get(Message, requested_reply)
-            if parent and parent.chat_id == chat_id and parent.deleted_at is None:
+            if (parent and parent.chat_id == chat_id and parent.deleted_at is None
+                    and parent.kind != "system"):
                 reply_to_id = parent.id
 
         chat = db.session.get(Chat, chat_id)
+        created = utcnow()
+        expires_at = created + \
+            timedelta(seconds=chat.disappear_seconds) if chat.disappear_seconds else None
         message = Message(
-            chat_id=chat_id, sender_id=current_user.id, body=body,
-            client_id=client_id, reply_to_id=reply_to_id)
+            chat_id=chat_id, sender_id=current_user.id, body=body, kind="text",
+            client_id=client_id, reply_to_id=reply_to_id,
+            created_at=created, expires_at=expires_at)
         db.session.add(message)
         db.session.flush()
         recipients = db.session.scalars(select(ChatMember.user_id).where(
@@ -135,7 +143,7 @@ def register_socket_handlers(socketio):
         for recipient_id in recipients:
             db.session.add(MessageStatus(
                 message_id=message.id, user_id=recipient_id))
-        chat.updated_at = utcnow()
+        chat.updated_at = created
         db.session.commit()
         data = message_payload(message, current_user.id)
         socketio.emit("message:new", data, to=f"chat:{chat_id}")
@@ -171,7 +179,7 @@ def register_socket_handlers(socketio):
             member_for(status.message.chat_id,
                        current_user.id).last_read_at = status.read_at
             changed = True
-        if not changed:                      # nothing new: no write, no broadcast
+        if not changed:
             return {"ok": True}
 
         db.session.commit()
@@ -184,22 +192,24 @@ def register_socket_handlers(socketio):
     @socketio.on("message:edit")
     def edit_message(payload):
         if not current_user.is_authenticated:
-            return {"ok": False, "error": "Sign in required."}
+            return fail("Sign in required.")
         payload = payload or {}
         try:
             message_id = int(payload.get("message_id"))
         except (TypeError, ValueError):
-            return {"ok": False, "error": "Invalid message."}
+            return fail("Invalid message.")
         body = str(payload.get("body", "")).strip()
         message = db.session.get(Message, message_id)
         if not message or not member_for(message.chat_id, current_user.id):
-            return {"ok": False, "error": "Message not found."}
+            return fail("Message not found.")
         if message.sender_id != current_user.id:
-            return {"ok": False, "error": "You can only edit your own messages."}
+            return fail("You can only edit your own messages.")
         if message.deleted_at:
-            return {"ok": False, "error": "You can’t edit a deleted message."}
+            return fail("You can’t edit a deleted message.")
+        if (message.kind or "text") != "text":
+            return fail("Only text messages can be edited.")
         if not body or len(body) > 4000:
-            return {"ok": False, "error": "Message must contain 1-4000 characters."}
+            return fail("Message must contain 1-4000 characters.")
         message.body = body
         message.edited_at = utcnow()
         message.chat.updated_at = message.edited_at
@@ -211,23 +221,22 @@ def register_socket_handlers(socketio):
     @socketio.on("message:react")
     def react_to_message(payload):
         if not current_user.is_authenticated:
-            return {"ok": False, "error": "Sign in required."}
+            return fail("Sign in required.")
         payload = payload or {}
         try:
             message_id = int(payload.get("message_id"))
         except (TypeError, ValueError):
-            return {"ok": False, "error": "Invalid message."}
+            return fail("Invalid message.")
 
-        # Real emojis are never plain ASCII text.
         emoji = str(payload.get("emoji", "")).strip()
         if not emoji or len(emoji) > MAX_EMOJI_LENGTH or emoji.isascii():
-            return {"ok": False, "error": "Choose an emoji."}
+            return fail("Choose an emoji.")
 
         message = db.session.get(Message, message_id)
         if not message or not member_for(message.chat_id, current_user.id):
-            return {"ok": False, "error": "Message not found."}
-        if message.deleted_at:
-            return {"ok": False, "error": "You can’t react to a deleted message."}
+            return fail("Message not found.")
+        if message.deleted_at or message.kind == "system":
+            return fail("You can’t react to that message.")
 
         reaction = db.session.scalar(select(Reaction).where(
             Reaction.message_id == message_id,
@@ -241,7 +250,6 @@ def register_socket_handlers(socketio):
                 message_id=message_id, user_id=current_user.id, emoji=emoji))
         db.session.commit()
 
-        # Each member gets the chips from their own point of view.
         for user_id in member_user_ids(message.chat_id):
             socketio.emit("message:reactions", {
                 "message_id": message_id,
@@ -250,26 +258,55 @@ def register_socket_handlers(socketio):
         return {"ok": True,
                 "reactions": message_payload(message, current_user.id)["reactions"]}
 
+    @socketio.on("message:star")
+    def star_message(payload):
+        if not current_user.is_authenticated:
+            return fail("Sign in required.")
+        try:
+            message_id = int((payload or {}).get("message_id"))
+        except (TypeError, ValueError):
+            return fail("Invalid message.")
+        message = db.session.get(Message, message_id)
+        if not message or not member_for(message.chat_id, current_user.id):
+            return fail("Message not found.")
+        if message.deleted_at or message.kind == "system":
+            return fail("You can’t star that message.")
+        star = db.session.get(MessageStar, (current_user.id, message_id))
+        if star:
+            db.session.delete(star)
+            starred = False
+        else:
+            db.session.add(MessageStar(
+                user_id=current_user.id, message_id=message_id))
+            starred = True
+        db.session.commit()
+        # keeps your other open tabs in sync
+        socketio.emit("message:starred", {"message_id": message_id, "starred": starred},
+                      to=f"user:{current_user.id}")
+        return {"ok": True, "starred": starred}
+
     @socketio.on("message:delete")
     def delete_message(payload):
         if not current_user.is_authenticated:
-            return {"ok": False, "error": "Sign in required."}
+            return fail("Sign in required.")
         payload = payload or {}
         try:
             message_id = int(payload.get("message_id"))
         except (TypeError, ValueError):
-            return {"ok": False, "error": "Invalid message."}
+            return fail("Invalid message.")
         message = db.session.get(Message, message_id)
         if not message or not member_for(message.chat_id, current_user.id):
-            return {"ok": False, "error": "Message not found."}
+            return fail("Message not found.")
+        if message.kind == "system":
+            return fail("Notices can’t be deleted.")
 
         if payload.get("scope") == "everyone":
             if message.sender_id != current_user.id:
-                return {"ok": False,
-                        "error": "You can only delete your own messages for everyone."}
+                return fail("You can only delete your own messages for everyone.")
             if not message.deleted_at:
+                remove_media_files([message])      # the photo or voice note is really gone
                 message.deleted_at = utcnow()
-                message.body = ""            # the text is really gone
+                message.body = ""
                 message.media_url = None
                 db.session.execute(
                     sql_delete(Reaction).where(Reaction.message_id == message.id))
@@ -280,7 +317,6 @@ def register_socket_handlers(socketio):
             }, to=f"chat:{message.chat_id}")
             return {"ok": True}
 
-        # "me": hide it for this user only
         if not db.session.get(MessageHidden, (message.id, current_user.id)):
             db.session.add(MessageHidden(
                 message_id=message.id, user_id=current_user.id))
