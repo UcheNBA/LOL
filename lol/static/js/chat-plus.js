@@ -89,18 +89,26 @@
         if (file.size > MAX_BYTES) { showToast("That file is too big. The limit is 25 MB."); return; }
         if (!file.name) file = new File([file], file.type.startsWith("image/") ? "photo.png" : "file", { type: file.type });
         const isImage = /\.(png|jpe?g|gif|webp)$/i.test(file.name);
+        const isVideo = /\.(mp4|webm|mov|m4v)$/i.test(file.name);
 
         const dlg = make("dialog", "lol-dialog send-preview");
         dlg.setAttribute("aria-label", "Send a file");
         dlg.innerHTML = `<h2>Send to ${escapeHTML(chat.title)}</h2><div class="pv-body"></div><label class="field"><span class="sr-only">Caption</span><input class="pv-caption" maxlength="1000" placeholder="Add a caption (optional)" autocomplete="off"></label><div class="pv-actions"><button type="button" class="btn-quiet" data-cancel>Cancel</button><button type="button" class="button button-primary pv-send">Send</button></div>`;
         const body = $(".pv-body", dlg);
         let objectUrl = "";
-        if (isImage) {
+        if (isImage || isVideo) {
             objectUrl = URL.createObjectURL(file);
-            const image = make("img");
-            image.src = objectUrl;
-            image.alt = "Preview";
-            body.append(image);
+            const preview = make(isVideo ? "video" : "img");
+            preview.src = objectUrl;
+        if (isVideo) {
+                preview.controls = true;
+                preview.muted = true;
+                preview.playsInline = true;
+                preview.preload = "metadata";
+            } else {
+                preview.alt = "Preview";
+            }
+            body.append(preview);
         } else {
             body.innerHTML = `<div class="pv-file"><span aria-hidden="true">${api.fileIcon(file.name)}</span><div><b>${escapeHTML(file.name)}</b><small>${api.formatBytes(file.size)}</small></div></div>`;
         }

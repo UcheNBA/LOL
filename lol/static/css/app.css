@@ -3360,3 +3360,18 @@ html.lol-splashing { overflow: hidden; }
     .lol-dialog { padding: 22px 18px 18px; }
     .media-image img { width: min(240px, 62vw); }
 }
+
+/* ---- videos ---- */
+.media-video {
+    display: block;
+    width: min(300px, 68vw);
+    max-height: 360px;
+    border-radius: 6px;
+    background: #000;
+}
+.send-preview .pv-body video {
+    max-width: 100%;
+    max-height: 300px;
+    border-radius: 8px;
+    background: #000;
+}

@@ -53,8 +53,16 @@ def create_app(test_config=None):
     if test_config:
         app.config.update(test_config)
 
-    os.makedirs(app.instance_path, exist_ok=True)
-    os.makedirs(app.config["UPLOAD_DIR"], exist_ok=True)
+        os.makedirs(app.instance_path, exist_ok=True)
+    try:
+        os.makedirs(app.config["UPLOAD_DIR"], exist_ok=True)
+    except OSError:
+        # e.g. UPLOAD_DIR points at a disk that isn't mounted
+        fallback = os.path.join(app.instance_path, "uploads")
+        app.logger.warning("Cannot use UPLOAD_DIR %s, using %s instead",
+                           app.config["UPLOAD_DIR"], fallback)
+        app.config["UPLOAD_DIR"] = fallback
+        os.makedirs(fallback, exist_ok=True)
     db.init_app(app)
     login_manager.init_app(app)
     csrf.init_app(app)

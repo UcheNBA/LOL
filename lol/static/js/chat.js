@@ -155,6 +155,7 @@
     function previewCore(message) {
         if (message.deleted) return "🚫 Message deleted";
         if (message.kind === "image") return `📷 ${message.body || "Photo"}`;
+        if (message.kind === "video") return `🎥 ${message.body || "Video"}`;
         if (message.kind === "voice") return `🎤 Voice message${message.media?.duration ? ` (${clockText(message.media.duration)})` : ""}`;
         if (message.kind === "file") return `📎 ${message.media?.name || "File"}`;
         return message.body || "";
@@ -458,6 +459,9 @@
         if (message.kind === "image") {
             return `<button class="media-image" type="button" data-lightbox="${url}" data-name="${name}" aria-label="Open photo ${name}"><img src="${url}" alt="${name}" loading="lazy"></button>`;
         }
+        if (message.kind === "video") {
+            return `<video class="media-video" src="${url}" controls preload="metadata" playsinline aria-label="Video ${name}"></video>`;
+        }
         if (message.kind === "voice") {
             return `<div class="voice" data-voice="${url}" data-duration="${Number(media.duration) || 0}"><button class="voice-play" type="button" aria-label="Play voice message"><span class="v-play">▶</span><span class="v-pause">❚❚</span></button><div class="voice-track" role="progressbar" aria-label="Voice message progress"><i></i></div><span class="voice-time">${clockText(media.duration)}</span></div>`;
         }
@@ -486,7 +490,7 @@
         const classes = ["message-bubble"];
         if (message.deleted) classes.push("is-deleted");
         if (big) classes.push("emoji-only");
-        if (!message.deleted && kind === "image") classes.push("has-photo");
+        if (!message.deleted && (kind === "image" || kind === "video")) classes.push("has-photo");
         return `<div class="message-content"><div class="${classes.join(" ")}">${content}<footer>${star}${timer}${edited}<time>${escapeHTML(time)}</time>${statusHTML(message)}</footer></div>${actionsHTML(message)}<div class="reaction-list" data-reactions-for="${message.id || ""}">${reactions}</div></div>`;
     }
 
@@ -718,7 +722,7 @@
         image.src = url;
         image.alt = name || "Photo";
         const save = dlg.querySelector(".lightbox-save");
-        save.href = url;
+        save.href = `${url}?download=1`;
         save.download = name || "photo";
         dlg.addEventListener("click", (event) => { if (!event.target.closest(".lightbox-save")) dlg.close(); });
         dlg.addEventListener("close", () => dlg.remove());
@@ -1589,7 +1593,7 @@
         if (event.pointerType !== "touch") return;
         const row = event.target.closest(".message-row");
         if (!row || !row.dataset.messageId || row.classList.contains("message-system") || row.querySelector(".is-deleted")) return;
-        if (event.target.closest(".voice-track")) return;
+        if (event.target.closest(".voice-track, video")) return;
         swipe = { row, id: event.pointerId, x: event.clientX, y: event.clientY, dx: 0, active: false };
     });
     stream.addEventListener("pointermove", (event) => {
@@ -1642,7 +1646,7 @@
             openLightbox(photo.dataset.lightbox, photo.dataset.name);
             return;
         }
-        if (event.target.closest("a, .voice")) return;       // links and files do their own thing
+        if (event.target.closest("a, .voice, video")) return;       // links, files and videos do their own thing
         const quote = event.target.closest("[data-jump]");
         if (quote) {
             jumpTo(quote.dataset.jump);
@@ -1668,6 +1672,10 @@
     // photos load after the page scrolls: keep the bottom in view if you were at the bottom
     stream.addEventListener("load", (event) => {
         if (event.target.tagName === "IMG" && stickBottom) history.scrollTop = history.scrollHeight;
+    }, true);
+
+    stream.addEventListener("loadedmetadata", () => {
+        if (stickBottom) history.scrollTop = history.scrollHeight;
     }, true);
 
     document.addEventListener("click", (event) => {

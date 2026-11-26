@@ -77,6 +77,8 @@ def preview_core(message):
         return DELETED_PREVIEW
     if message.kind == "image":
         return "📷 " + (message.body or "Photo")
+    if message.kind == "video":
+        return "🎥 " + (message.body or "Video")
     if message.kind == "voice":
         extra = f" ({fmt_duration(message.media_duration)})" if message.media_duration else ""
         return "🎤 Voice message" + extra
@@ -86,7 +88,7 @@ def preview_core(message):
 
 
 def media_payload(message):
-    if message.kind not in ("image", "voice", "file") or not message.media_url:
+    if message.kind not in ("image", "voice", "video", "file") or not message.media_url:
         return None
     return {
         "url": f"/api/messages/{message.id}/media",
