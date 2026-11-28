@@ -8,14 +8,13 @@
     <aside class="chat-sidebar" aria-label="Your conversations">
         <div class="sidebar-head">
             <div>
-                <p class="eyebrow">YOUR CORNER OF THE INTERNET</p>
-                <h1>Messages<span class="wordmark-period">.</span></h1>
-            </div><button class="icon-button new-chat-button" type="button" title="Start a chat"
-                aria-label="Start a chat">＋</button>
+                <h1>Chats</h1>
+            </div><button class="icon-button new-chat-button" type="button" title="New chat"
+                aria-label="New chat">＋</button>
         </div>
         <div class="sidebar-tools">
-            <button type="button" id="new-group">👥 New group</button>
-            <button type="button" id="open-starred">★ Starred</button>
+            <button type="button" id="new-group" data-ic-lead="users">New group</button>
+            <button type="button" id="open-starred" data-ic-lead="star">Starred</button>
         </div>
         <label class="chat-search"><span aria-hidden="true">⌕</span><input id="chat-filter" type="search"
                 placeholder="Search conversations" autocomplete="off" aria-label="Search conversations"></label>
@@ -34,9 +33,9 @@
             </button>
             {% endfor %}
             <div class="empty-list" id="empty-list" {% if chats %}hidden{% endif %}><span
-                    class="empty-graphic">↗</span><strong>Your chats will live here.</strong>
-                <p>Search for someone and say hello.</p><button class="text-button new-chat-button" type="button">Find a
-                    person</button>
+                    class="empty-graphic" aria-hidden="true">↗</span><strong>No conversations yet.</strong>
+                <p>Search for someone to start chatting.</p><button class="text-button new-chat-button"
+                    type="button">Find a person</button>
             </div>
             <p class="no-results" id="no-results" hidden>No conversations match that search.</p>
         </div>
@@ -49,11 +48,10 @@
     <section class="conversation" id="conversation" aria-label="Conversation" aria-live="off">
         <div class="conversation-empty" id="conversation-empty">
             <div class="empty-mark">lol<span>.</span></div>
-            <h2>Make a little connection.</h2>
-            <p>Pick up a conversation or find someone new.</p><button class="button button-primary new-chat-button"
-                type="button">Find someone <span aria-hidden="true">↗</span></button>
-            <div class="end-to-end-note"><span aria-hidden="true">⌁</span> ENTER TO SEND · SHIFT+ENTER FOR A NEW LINE
-            </div>
+            <h2>Your messages</h2>
+            <p>Select a conversation, or start a new one.</p><button class="button button-primary new-chat-button"
+                type="button">New chat</button>
+            <div class="end-to-end-note">Enter to send · Shift+Enter for a new line</div>
         </div>
         <div class="conversation-active" id="conversation-active" hidden>
             <header class="conversation-head"><button class="icon-button back-button" id="back-to-list" type="button"
@@ -72,17 +70,19 @@
             <form class="composer" id="message-form"><button class="composer-tool" id="emoji-toggle" type="button"
                     aria-label="Insert emoji" title="Insert emoji">☺</button><button class="composer-tool"
                     id="attach-button" type="button" aria-label="Attach a photo or file"
-                    title="Attach a photo or file">📎</button><input id="file-input"accept="image/*,video/*,audio/*,.mp4,.webm,.mov,.m4v,.pdf,.txt,.csv,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip,.rtf,.odt" type="file" hidden
-                    accept="image/*,audio/*,.pdf,.txt,.csv,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip,.rtf,.odt"><label
+                    title="Attach a photo or file">📎</button><button class="composer-tool" id="camera-button"
+                    type="button" aria-label="Take a photo" title="Take a photo">📷</button><input id="file-input"
+                    type="file" hidden
+                    accept="image/*,video/*,audio/*,.mp4,.webm,.mov,.m4v,.pdf,.txt,.csv,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip,.rtf,.odt"><input
+                    id="camera-input" type="file" accept="image/*" capture="environment" hidden><label
                     class="composer-input"><span class="sr-only">Write a message</span><textarea id="message-input"
-                        rows="1" maxlength="4000" placeholder="Write a message…" autocomplete="off"
+                        rows="1" maxlength="4000" placeholder="Type a message" autocomplete="off"
                         enterkeyhint="send"></textarea></label><button class="edit-cancel" id="edit-cancel"
                     type="button" hidden aria-label="Cancel edit">Cancel</button><button class="composer-tool"
                     id="mic-button" type="button" aria-label="Record a voice message"
                     title="Record a voice message">🎤</button><button class="send-button" id="send-button"
                     type="submit" aria-label="Send message" title="Send message"><span
                         aria-hidden="true">↗</span></button></form>
-            <p class="composer-footnote">*bold* · _italic_ · ~strike~ · `code`</p>
         </div>
         <div class="emoji-picker" id="emoji-picker" role="toolbar" aria-label="Emoji picker" hidden></div>
     </section>
@@ -90,7 +90,7 @@
 <dialog class="search-dialog" id="search-dialog" aria-labelledby="search-title">
     <form method="dialog" class="dialog-dismiss"><button class="icon-button" aria-label="Close search">×</button></form>
     <p class="eyebrow">NEW CONVERSATION</p>
-    <h2 id="search-title">Who’s on your mind?</h2><label class="people-search"><span aria-hidden="true">⌕</span><input
+    <h2 id="search-title">Find someone</h2><label class="people-search"><span aria-hidden="true">⌕</span><input
             id="people-query" type="search" placeholder="Name, username, email, or phone" autocomplete="off"></label>
     <div class="people-results" id="people-results" aria-live="polite">
         <p class="search-hint">Type at least 2 characters to find people.</p>
@@ -98,6 +98,6 @@
 </dialog>
 <script defer src="https://cdn.socket.io/4.8.1/socket.io.min.js" crossorigin="anonymous"></script>
 <script id="initial-chats" type="application/json">{{ chats | tojson }}</script>
-<script defer src="{{ url_for('static', filename='js/chat.js', v=3) }}"></script>
-<script defer src="{{ url_for('static', filename='js/chat-plus.js', v=1) }}"></script>
+<script defer src="{{ url_for('static', filename='js/chat.js', v=6) }}"></script>
+<script defer src="{{ url_for('static', filename='js/chat-plus.js', v=3) }}"></script>
 {% endblock %}

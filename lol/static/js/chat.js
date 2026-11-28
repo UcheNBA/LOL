@@ -153,11 +153,11 @@
     /* ---------- One-line descriptions of a message ---------- */
 
     function previewCore(message) {
-        if (message.deleted) return "🚫 Message deleted";
-        if (message.kind === "image") return `📷 ${message.body || "Photo"}`;
-        if (message.kind === "video") return `🎥 ${message.body || "Video"}`;
-        if (message.kind === "voice") return `🎤 Voice message${message.media?.duration ? ` (${clockText(message.media.duration)})` : ""}`;
-        if (message.kind === "file") return `📎 ${message.media?.name || "File"}`;
+        if (message.deleted) return "This message was deleted";
+        if (message.kind === "image") return message.body || "Photo";
+        if (message.kind === "video") return message.body || "Video";
+        if (message.kind === "voice") return `Voice message${message.media?.duration ? ` (${clockText(message.media.duration)})` : ""}`;
+        if (message.kind === "file") return message.media?.name || "File";
         return message.body || "";
     }
 
@@ -223,6 +223,7 @@
     function autosize() {
         input.style.height = "auto";
         if (input.value) input.style.height = `${Math.min(input.scrollHeight, 120)}px`;
+        input.dispatchEvent(new Event("lol:input"));
     }
 
     function restoreDraft() {
@@ -481,7 +482,7 @@
             ? `<b class="sender" style="--h:${hueOf(message.sender_id)}">${escapeHTML(message.sender_name || "Someone")}</b>` : "";
         const caption = message.body ? `<p>${formatText(message.body)}</p>` : "";
         const content = message.deleted
-            ? `<p class="deleted-text">🚫 ${mine ? "You deleted this message" : "This message was deleted"}</p>`
+            ? `<p class="deleted-text"> ${mine ? "You deleted this message" : "This message was deleted"}</p>`
             : `${sender}${replyQuoteHTML(message)}${mediaHTML(message)}${caption}`;
         const edited = !message.deleted && message.edited ? '<span class="message-edited">edited</span>' : "";
         const star = !message.deleted && message.starred ? '<span class="msg-star" title="Starred">★</span>' : "";
@@ -717,7 +718,7 @@
     function openLightbox(url, name) {
         const dlg = document.createElement("dialog");
         dlg.className = "lightbox";
-        dlg.innerHTML = '<button type="button" class="lightbox-close" aria-label="Close photo">✕</button><a class="lightbox-save">⬇ Save</a><img alt="">';
+        dlg.innerHTML = '<button type="button" class="lightbox-close" aria-label="Close photo"></button><a class="lightbox-save">Save</a><img alt="">'
         const image = dlg.querySelector("img");
         image.src = url;
         image.alt = name || "Photo";
@@ -844,12 +845,12 @@
         patchCached(data.chat_id, id, { deleted: true, body: "", media: null, reactions: [] });
         const row = stream.querySelector(`.message-row[data-message-id="${id}"]`);
         if (row) row.innerHTML = bubbleHTML(message);
-        stream.querySelectorAll(`.reply-quote[data-jump="${id}"] span`).forEach((node) => { node.textContent = "🚫 Message deleted"; });
+        stream.querySelectorAll(`.reply-quote[data-jump="${id}"] span`).forEach((node) => { node.textContent = "Message deleted"; });
         if (replyTo && String(replyTo.id) === id) cancelReply();
         if (editingMessageId && String(editingMessageId) === id) cancelEditing();
         const chat = chats.find((item) => Number(item.id) === Number(data.chat_id));
         if (chat && Number(chat.last_message_id) === Number(data.message_id)) {
-            chat.preview = "🚫 Message deleted";
+            chat.preview = "Message deleted";
             renderChatList();
         }
     }

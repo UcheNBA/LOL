@@ -490,4 +490,26 @@
         }
     }
     $("#open-starred")?.addEventListener("click", openStarred);
+
+        /* =====================================================
+       7. Camera, and mic / send swap
+       ===================================================== */
+
+    const cameraButton = $("#camera-button");
+    const cameraInput = $("#camera-input");
+    cameraButton?.addEventListener("click", () => {
+        if (!api.getActiveChat()?.id) { showToast("Open a chat first."); return; }
+        cameraInput.click();
+    });
+    cameraInput?.addEventListener("change", () => {
+        const file = cameraInput.files[0];
+        cameraInput.value = "";
+        if (file) askToSend(file);
+    });
+
+    // show the mic while the box is empty and the send button once there is text
+    const syncComposer = () => composer.classList.toggle("has-text", Boolean(input.value.trim()));
+    ["input", "lol:input"].forEach((name) => input.addEventListener(name, syncComposer));
+    if (!supported) composer.classList.add("no-mic");
+    syncComposer();
 })();

@@ -10,7 +10,7 @@ from .models import (Chat, ChatMember, Message, MessageHidden, MessageStar,
                      MessageStatus, Reaction, User, utcnow)
 from .presence import is_online
 
-DELETED_PREVIEW = "🚫 Message deleted"
+DELETED_PREVIEW = "This message was deleted"
 
 
 def as_utc(value):
@@ -76,14 +76,14 @@ def preview_core(message):
     if message.deleted_at:
         return DELETED_PREVIEW
     if message.kind == "image":
-        return "📷 " + (message.body or "Photo")
+        return message.body or "Photo"
     if message.kind == "video":
-        return "🎥 " + (message.body or "Video")
+        return message.body or "Video"
     if message.kind == "voice":
         extra = f" ({fmt_duration(message.media_duration)})" if message.media_duration else ""
-        return "🎤 Voice message" + extra
+        return "Voice message" + extra
     if message.kind == "file":
-        return "📎 " + (message.media_name or "File")
+        return message.media_name or "File"
     return message.body or ""
 
 
